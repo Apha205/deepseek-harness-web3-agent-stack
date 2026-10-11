@@ -60,6 +60,16 @@ stays dormant until the wallet seam is present (`inject: [wallet, tools]`).
 
 - `synapse/pinned` `{ cid }` — emitted at the commit point of every pin.
 
+## Piece shape (readers only play single-block)
+
+Every store packs the bytes as a single-raw-block CARv1 (whole file = one
+`0x55` block under a tag-42 header root) at every size — a port of
+haven-cli's single-block builder without its 32 MiB ceiling. Chunked UnixFS
+is never emitted: readers reject multi-block pieces whose dag-pb root they
+cannot verify ("Nested CAR container"), and no real chunker emits the bare
+header encoding their check expects. Root CIDs are therefore raw-codec
+(`bafkrei…`), never dag-pb; gated records address the CommP piece anyway.
+
 ## Limitations
 
 - Sign-only authentication headers follow the scheme documented above; a

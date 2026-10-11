@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
-import { CREATE_RESULT_SCHEMA, QUERY_RESULT_SCHEMA, inject, toJsonSafeRecord } from '../src/index.ts'
+import { CREATE_RESULT_SCHEMA, QUERY_RESULT_SCHEMA, inject, payloadPointer, toJsonSafeRecord } from '../src/index.ts'
 
 describe('arkiv output contracts', () => {
   it('arkiv_query accepts an entity list (array-rooted)', () => {
@@ -67,6 +67,23 @@ describe('arkiv output contracts', () => {
     // Live failure: without the declaration Cordis throws 'cannot get
     // property "credentials" without inject' on every signing path.
     expect([...inject]).toEqual(expect.arrayContaining(['wallet', 'tools', 'credentials']))
+  })
+})
+
+describe('arkiv ops-log pointers', () => {
+  const enc = (s: string) => new TextEncoder().encode(s)
+  it('logs the piece pointer for gated payloads', () => {
+    // Ops incident: the Stevie single-block re-pointing landed on-chain
+    // with no journal trace. Write tools now log key + piece + txHash.
+    expect(payloadPointer(enc(JSON.stringify({ piece: 'bafkzcibabc', gate: '{}' })))).toBe('piece=bafkzcibabc')
+  })
+  it('logs the fcid pointer for clear payloads', () => {
+    expect(payloadPointer(enc(JSON.stringify({ fcid: 'bafkreibc', size: 3 })))).toBe('fcid=bafkreibc')
+  })
+  it('falls back to a pointer-less form, never bytes', () => {
+    expect(payloadPointer(enc(JSON.stringify({ targets: ['a', 'b'] })))).toBe('targets=2')
+    expect(payloadPointer(enc('not json'))).toBe('pointer=(none)')
+    expect(payloadPointer(enc(JSON.stringify({ piece: 42 })))).toBe('pointer=(none)')
   })
 })
 

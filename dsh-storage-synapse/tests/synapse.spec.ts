@@ -33,10 +33,10 @@ const testSignal = new AbortController().signal
 // filecoin-pin itself (upload-selection inputs), never the network.
 
 // filecoin-pin seam mocks for the backend suite: no network, no wallet.
+// CAR packing is local (./singleBlockCar.ts) and runs for real; only the
+// chain-facing seams are mocked.
 const pinMocks = vi.hoisted(() => ({
   executeUpload: vi.fn(),
-  buildCar: vi.fn(),
-  cleanup: vi.fn(),
   findPiece: vi.fn(),
   getApprovedPDPProviders: vi.fn(),
   createPublicClient: vi.fn(),
@@ -45,15 +45,10 @@ const pinMocks = vi.hoisted(() => ({
 vi.mock('filecoin-pin/core/synapse', () => ({
   initializeSynapse: vi.fn(async () => ({})),
 }))
-vi.mock('filecoin-pin/core/unixfs', () => ({
-  createUnixfsCarBuilder: vi.fn(() => ({ buildCar: pinMocks.buildCar, cleanup: pinMocks.cleanup })),
-}))
 vi.mock('filecoin-pin/core/upload', () => ({
   executeUpload: pinMocks.executeUpload,
 }))
-vi.mock('multiformats/cid', () => ({
-  CID: { parse: (s: string) => s },
-}))
+// multiformats/cid runs unmocked: packing and root parsing prove real CID wiring.
 vi.mock('@filoz/synapse-core/sp', () => ({
   findPiece: pinMocks.findPiece,
 }))
@@ -339,6 +334,56 @@ describe('exactly-once: content ledger + pin read-back (real runtime path)', () 
   })
 })
 
+describe('single-block CAR packing (reader-playable pieces)', () => {
+  // Oracle: python hashlib.sha256 + base32 CIDv1 (01 55 12 20 digest).
+  // 'hello world' matches the well-known bafkrei…n5e vector.
+  const HELLO_CID = 'bafkreifzjut3te2nhyekklss27nh3k72ysco7y32koao5eei66wof36n5e'
+  const PAYLOAD_CID = 'bafkreibdt5m62vphg7dxcr6pkwwqygydbnwx5z2iu5bgsuxzxbjnlkjv4u'
+
+  it('root CIDs match the independent oracle', async () => {
+    const { packSingleBlockCar } = await import('../src/singleBlockCar.ts')
+    expect(packSingleBlockCar(new TextEncoder().encode('payload')).rootCid).toBe(PAYLOAD_CID)
+    expect(packSingleBlockCar(new TextEncoder().encode('hello world')).rootCid).toBe(HELLO_CID)
+  })
+
+  it('packs exactly one raw frame under a tag-42 header (haven-cli shape)', async () => {
+    const { packSingleBlockCar } = await import('../src/singleBlockCar.ts')
+    const { createHash } = await import('node:crypto')
+    const data = new TextEncoder().encode('payload')
+    const { carBytes, rootCid } = packSingleBlockCar(data)
+    const digestHex = createHash('sha256').update(data).digest('hex')
+    // 1 header-len + 58 header + 1 frame-len + 36 CID + 7 data.
+    expect(carBytes.length).toBe(103)
+    expect(Array.from(carBytes.subarray(0, 18))).toEqual([
+      58, 0xa2, 0x65, 0x72, 0x6f, 0x6f, 0x74, 0x73, 0x81,
+      0xd8, 0x2a, 0x58, 0x25, 0x00, 0x01, 0x55, 0x12, 0x20,
+    ])
+    expect(Buffer.from(carBytes.subarray(18, 50)).toString('hex')).toBe(digestHex)
+    // "version": 1 suffix, then the single frame: varint(43) + CID + data.
+    expect(Array.from(carBytes.subarray(50, 60))).toEqual([
+      0x67, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x01, 43,
+    ])
+    expect(Array.from(carBytes.subarray(60, 64))).toEqual([0x01, 0x55, 0x12, 0x20])
+    expect(Buffer.from(carBytes.subarray(64, 96)).toString('hex')).toBe(digestHex)
+    expect(Buffer.from(carBytes.subarray(96)).toString()).toBe('payload')
+    expect(rootCid).toBe(PAYLOAD_CID)
+  })
+
+  it('packing is deterministic and varints are canonical', async () => {
+    const { encodeVarint, packSingleBlockCar } = await import('../src/singleBlockCar.ts')
+    const data = new TextEncoder().encode('same-bytes')
+    const a = packSingleBlockCar(data)
+    const b = packSingleBlockCar(new TextEncoder().encode('same-bytes'))
+    expect(Buffer.from(a.carBytes).equals(Buffer.from(b.carBytes))).toBe(true)
+    expect(a.rootCid).toBe(b.rootCid)
+    expect(Array.from(encodeVarint(0))).toEqual([0])
+    expect(Array.from(encodeVarint(127))).toEqual([127])
+    expect(Array.from(encodeVarint(128))).toEqual([0x80, 0x01])
+    expect(Array.from(encodeVarint(300))).toEqual([0xac, 0x02])
+    expect(() => encodeVarint(-1)).toThrow()
+  })
+})
+
 describe('provider selection: no default exclusions, one loud fallback', () => {
   it('defaults exclude nobody — the old [4, 9] was the whole endorsed set', () => {
     // Calibration's endorsed set has been exactly [4, 9]: excluding both fails
@@ -356,12 +401,12 @@ describe('provider selection: no default exclusions, one loud fallback', () => {
     expect(isProviderSelectionError(undefined)).toBe(false)
   })
 
-  /** Backend with mocked filecoin-pin: CAR bytes come from a real temp file, selection from the mock. */
+  /** Raw CID of b'payload' (python hashlib + base32 oracle — see the packing suite). */
+  const PAYLOAD_CID = 'bafkreibdt5m62vphg7dxcr6pkwwqygydbnwx5z2iu5bgsuxzxbjnlkjv4u'
+
+  /** Backend with mocked filecoin-pin: CAR packing runs for real, selection from the mock. */
   async function backendHarness(opts: { excludeProviderIds?: bigint[]; providerIds?: bigint[]; pieceLedgerPath?: string }) {
     const dir = await mkdtemp(join(tmpdir(), 'dsh-synapse-be-'))
-    const carFile = join(dir, 'piece.car')
-    await writeFile(carFile, 'car-bytes')
-    pinMocks.buildCar.mockResolvedValue({ rootCid: 'bafybackend', carPath: carFile })
     pinMocks.createPublicClient.mockReturnValue({})
     pinMocks.httpTransport.mockReturnValue({})
     pinMocks.getApprovedPDPProviders.mockResolvedValue([
@@ -390,7 +435,7 @@ describe('provider selection: no default exclusions, one loud fallback', () => {
         .mockRejectedValueOnce(new Error('StorageContext smartSelect failed: No endorsed provider available'))
         .mockResolvedValueOnce({ pieceCid: 'baga-piece' })
       const stored = await backend.store(new TextEncoder().encode('payload'))
-      expect(stored).toEqual({ cid: 'bafybackend', pieceCid: 'baga-piece' })
+      expect(stored).toEqual({ cid: PAYLOAD_CID, pieceCid: 'baga-piece' })
       expect(pinMocks.executeUpload).toHaveBeenCalledTimes(2)
       // Primary carries the exclusions; the fallback drops them (stale lists fail open, loudly).
       expect(pinMocks.executeUpload.mock.calls[0]?.[3]).toMatchObject({ excludeProviderIds: [4n, 9n] })
@@ -419,7 +464,7 @@ describe('provider selection: no default exclusions, one loud fallback', () => {
       // JSON.stringify throws and turns success into a thrown error.
       pinMocks.executeUpload.mockResolvedValueOnce({ pieceCid: 'baga-piece', dataSetId: 42n, fee: 1000n })
       const stored = await backend.store(new TextEncoder().encode('payload'))
-      expect(stored).toEqual({ cid: 'bafybackend', pieceCid: 'baga-piece' })
+      expect(stored).toEqual({ cid: PAYLOAD_CID, pieceCid: 'baga-piece' })
       expect(preview({ dataSetId: 42n })).toContain('42n')
     } finally {
       await rm(dir, { recursive: true, force: true })
@@ -490,6 +535,21 @@ describe('provider selection: no default exclusions, one loud fallback', () => {
       pinMocks.executeUpload.mockRejectedValueOnce(new Error('filecoin store failed: 507 Insufficient Storage'))
       await expect(backend.store(new TextEncoder().encode('payload'))).rejects.toThrow(/507/)
       expect(pinMocks.executeUpload).toHaveBeenCalledTimes(1)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('store uploads the single-block CAR bytes under the raw root CID', async () => {
+    const { backend, dir } = await backendHarness({})
+    try {
+      pinMocks.executeUpload.mockResolvedValueOnce({ pieceCid: 'baga-piece' })
+      await backend.store(new TextEncoder().encode('payload'))
+      expect(pinMocks.executeUpload).toHaveBeenCalledTimes(1)
+      const call = pinMocks.executeUpload.mock.calls[0] as [unknown, Uint8Array, { toString(): string }, unknown]
+      expect(String(call[2])).toBe(PAYLOAD_CID) // real CID.parse round-trip
+      expect(call[1].length).toBe(103) // 1 + 58 header + 1 + 36 CID + 7 data
+      expect(call[1][0]).toBe(58)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

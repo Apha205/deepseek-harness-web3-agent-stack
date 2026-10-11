@@ -562,6 +562,21 @@ export function toJsonSafeRecord(record: ArkivEntityRecord): Record<string, unkn
   return out
 }
 
+/**
+ * Content pointer for write-tool ops logs: piece (encrypted) XOR fcid
+ * (clear), targets count for drip series. Pointer only — never payload
+ * bytes, mirroring the tool-output boundary below.
+ */
+export function payloadPointer(payload: Uint8Array): string {
+  try {
+    const parsed = JSON.parse(Buffer.from(payload).toString('utf8')) as Record<string, unknown>
+    if (typeof parsed.piece === 'string') return `piece=${parsed.piece}`
+    if (typeof parsed.fcid === 'string') return `fcid=${parsed.fcid}`
+    if (Array.isArray(parsed.targets)) return `targets=${parsed.targets.length}`
+  } catch { /* fall through to the pointer-less form */ }
+  return 'pointer=(none)'
+}
+
 /** Batch creates return one {key, txHash} per record, in order (one shared txHash). */
 export const BATCH_RESULT_SCHEMA = {
   type: 'array',
@@ -597,10 +612,12 @@ export function apply(ctx: Context, config: Config): void {
     async execute(args: { path?: string; payload?: string; contentType: string; attributes?: Record<string, unknown>; expiresIn?: number }, exec): Promise<{ key: string; owner: string; txHash: string }> {
       if ((args.path === undefined) === (args.payload === undefined)) throw new Error('provide exactly one of path or payload');
       const payload = args.path !== undefined ? await readFile(args.path) : Buffer.from(args.payload as string, 'utf8');
+      console.log(`[arkiv_create_entity] called src=${args.path ?? `inline(${payload.length}B)`} ${payloadPointer(payload)}`);
       const record = await arkiv.createEntity({ payload, contentType: args.contentType, attributes: args.attributes, expiresIn: args.expiresIn });
       // Project to the declared output shape: the full record carries payload
       // bytes that are neither JSON nor model-meaningful, and the registry
       // rejects undeclared keys under additionalProperties:false.
+      console.log(`[arkiv_create_entity] done key=${record.key} txHash=${record.txHash} ${payloadPointer(payload)}`);
       return { key: record.key as string, owner: record.owner as string, txHash: record.txHash as string };
     },
     presentCall: args => ({ card: 'generic', title: `Create Arkiv entity ${args.path ? basename(args.path) : 'payload'}`, kind: 'execute' }),
@@ -620,7 +637,10 @@ export function apply(ctx: Context, config: Config): void {
     output: { schema: { type: 'object', additionalProperties: true } as any, render: (_args, v) => [{ type: 'text', text: JSON.stringify(v) }] },
     async execute(args: { key: string; path?: string; payload?: string; contentType: string; attributes?: Record<string, unknown>; expiresIn?: number }, exec) {
       const p = args.path !== undefined ? await readFile(args.path) : Buffer.from(args.payload ?? '', 'utf8');
-      return arkiv.updateEntity({ key: args.key as `0x${string}`, payload: p, contentType: args.contentType, attributes: args.attributes, expiresIn: args.expiresIn });
+      console.log(`[arkiv_update_entity] called key=${args.key} src=${args.path ?? `inline(${p.length}B)`} ${payloadPointer(p)}`);
+      const updated = await arkiv.updateEntity({ key: args.key as `0x${string}`, payload: p, contentType: args.contentType, attributes: args.attributes, expiresIn: args.expiresIn });
+      console.log(`[arkiv_update_entity] done key=${args.key} txHash=${updated.txHash} ${payloadPointer(p)}`);
+      return updated;
     },
     presentCall: args => ({ card: 'generic', title: `Update Arkiv ${args.key}`, kind: 'execute' }),
   })));
@@ -655,6 +675,7 @@ export function apply(ctx: Context, config: Config): void {
     },
     async execute(args: { entities: Array<{ path?: string; payload?: string; contentType: string; attributes?: Record<string, unknown>; expiresIn?: number }> }): Promise<Array<{ key: string; txHash: string }>> {
       if (!Array.isArray(args.entities) || args.entities.length === 0) throw new Error('provide at least one entity');
+      console.log(`[arkiv_create_entities] called count=${args.entities.length}`);
       const records: Array<{ payload: Uint8Array; contentType: string; attributes?: Record<string, unknown>; expiresIn?: number }> = [];
       for (const [index, entry] of args.entities.entries()) {
         if ((entry.path === undefined) === (entry.payload === undefined)) {
@@ -668,6 +689,7 @@ export function apply(ctx: Context, config: Config): void {
         });
       }
       const results = await arkiv.createEntities(records);
+      console.log(`[arkiv_create_entities] done keys=${results.map(r => r.key).join(',')} txHash=${results[0]?.txHash ?? '(none)'}`);
       return results as Array<{ key: string; txHash: string }>;
     },
     presentCall: (args: { entities: unknown }) => ({ card: 'generic', title: `Create ${Array.isArray(args.entities) ? args.entities.length : 0} Arkiv entities (batch)`, kind: 'execute' }),

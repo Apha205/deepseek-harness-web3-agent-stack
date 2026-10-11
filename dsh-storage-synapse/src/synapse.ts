@@ -32,7 +32,7 @@ export function httpError(operation: string, response: Response): Error {
 
 export type SynapseMode = 'filecoin'
 
-/** What a store commits: the UnixFS root plus the PDP piece that carries it. */
+/** What a store commits: the CAR root plus the PDP piece that carries it. */
 export interface PieceLedgerEntry {
   pieceCid: string
   providerId?: string | undefined
@@ -149,21 +149,15 @@ export class FilecoinBackend {
     console.log(`[synapse] store start bytes=${data.length}`)
     const synapse = await this.ensureSynapse()
     console.log(`[synapse] synapse ready`)
-    const { createUnixfsCarBuilder } = await import('filecoin-pin/core/unixfs')
     const { executeUpload } = await import('filecoin-pin/core/upload')
     const { CID } = await import('multiformats/cid')
-    const { writeFile, readFile, unlink } = await import('node:fs/promises')
-    const { tmpdir } = await import('node:os')
-    const { join } = await import('node:path')
-    const { randomBytes } = await import('node:crypto')
-    const tmpPath = join(tmpdir(), `dsh-pin-${randomBytes(6).toString('hex')}.bin`)
-    await writeFile(tmpPath, data)
-    const builder: any = (createUnixfsCarBuilder as any)()
-    console.log(`[synapse] building CAR tmp=${tmpPath}`)
-    const car: any = await builder.buildCar(tmpPath)
-    console.log(`[synapse] CAR built rootCid=${car.rootCid} carPath=${car.carPath}`)
-    const carBytes = await readFile(car.carPath)
-    console.log(`[synapse] carBytes=${carBytes.length}`)
+    const { packSingleBlockCar } = await import('./singleBlockCar.ts')
+    // Single-block CAR at every size (see ./singleBlockCar.ts): chunked
+    // UnixFS roots fail readers' root check, one raw block always strips.
+    // In-memory — no temp input file, nothing to clean up on any exit.
+    const car = packSingleBlockCar(data)
+    const carBytes = car.carBytes
+    console.log(`[synapse] CAR built rootCid=${car.rootCid} carBytes=${carBytes.length}`)
     const rootCid: any = CID.parse(car.rootCid)
     const log = (lvl: string, ...a: any[]) => { try { console.log(`[synapse:${lvl}]`, ...a) } catch {} }
     const logger: any = { debug: (...a: any[]) => log('debug', ...a), info: (...a: any[]) => log('info', ...a), warn: (...a: any[]) => log('warn', ...a), error: (...a: any[]) => log('error', ...a) }
@@ -177,22 +171,20 @@ export class FilecoinBackend {
     }
     let result: any
     try {
-      try {
-        result = await this.runUpload(executeUpload, synapse, carBytes, rootCid, baseOpts, this.opts.excludeProviderIds, 'primary')
-      } catch (primaryError: unknown) {
-        // Calibration's endorsed set is tiny (it has been exactly the once-excluded
-        // [4, 9]) and it shifts without notice — a stale exclusion list fails
-        // selection with zero candidates. One fallback without exclusions, loudly
-        // logged; explicit providerIds are the operator's deliberate target and
-        // are never second-guessed.
-        if (this.opts.excludeProviderIds?.length && !this.opts.providerIds && isProviderSelectionError(primaryError)) {
-          console.log(`[synapse] primary selection failed with exclusions [${this.opts.excludeProviderIds.join(',')}]; retrying once without exclusions`)
-          result = await this.runUpload(executeUpload, synapse, carBytes, rootCid, baseOpts, undefined, 'fallback-no-exclusions')
-        } else {
-          throw primaryError
-        }
+      result = await this.runUpload(executeUpload, synapse, carBytes, rootCid, baseOpts, this.opts.excludeProviderIds, 'primary')
+    } catch (primaryError: unknown) {
+      // Calibration's endorsed set is tiny (it has been exactly the once-excluded
+      // [4, 9]) and it shifts without notice — a stale exclusion list fails
+      // selection with zero candidates. One fallback without exclusions, loudly
+      // logged; explicit providerIds are the operator's deliberate target and
+      // are never second-guessed.
+      if (this.opts.excludeProviderIds?.length && !this.opts.providerIds && isProviderSelectionError(primaryError)) {
+        console.log(`[synapse] primary selection failed with exclusions [${this.opts.excludeProviderIds.join(',')}]; retrying once without exclusions`)
+        result = await this.runUpload(executeUpload, synapse, carBytes, rootCid, baseOpts, undefined, 'fallback-no-exclusions')
+      } else {
+        throw primaryError
       }
-    } finally { try { await unlink(tmpPath) } catch {} try { await builder.cleanup?.(car?.carPath) } catch {} }
+    }
     const cid: string = car?.rootCid ?? result?.cid ?? result?.rootCid ?? ''
     if (!cid) throw new Error('dsh-storage-synapse: filecoin store returned empty CID')
     const pieceCid: string | undefined = result?.pieceCid ?? result?.piece
