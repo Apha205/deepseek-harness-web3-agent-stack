@@ -346,4 +346,25 @@ describe('registered tools', () => {
     const result = await call('prowlarr_search', { query: 'nothing' })
     expect(textOf(result)).toContain('No results for "nothing"')
   })
+
+  it('logs called/done lines for ops', async () => {
+    const { call } = await mount()
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    let lines: string[] = []
+    try {
+      await call('prowlarr_search', { query: 'tinashe popstar' })
+      lines = spy.mock.calls.map(args => String(args[0]))
+    } finally {
+      spy.mockRestore()
+    }
+    expect(lines.some(line => line.includes('[prowlarr_search] called query="tinashe popstar"'))).toBe(true)
+    expect(lines.some(line => line.includes('[prowlarr_search] done total=3 returned=3 truncated=false'))).toBe(true)
+  })
+})
+
+describe('ops-log text bound', () => {
+  it('passes short text through and bounds long text with length', () => {
+    expect(ProwlarrPlugin.logText('tinashe')).toBe('tinashe')
+    expect(ProwlarrPlugin.logText('x'.repeat(100))).toBe(`${'x'.repeat(80)}… (100 chars)`)
+  })
 })

@@ -30,6 +30,7 @@ import type { CheckContext, CheckDecision } from 'dsh-exactly-once'
 import { AcquireService } from './acquire.ts'
 import type { AcquireServiceOptions } from './acquire.ts'
 import { AcquisitionError } from './errors.ts'
+import { describeUrl } from './redact.ts'
 import type { ImportMode, SelectMode, TorrentClientName } from './types.ts'
 import { TORRENT_CLIENTS } from './types.ts'
 import type { AcquireResult } from './types.ts'
@@ -388,6 +389,27 @@ function invalid(message: string): never {
   throw new AcquisitionError(message, 'ACQUIRE_INVALID_REQUEST', { permanent: true })
 }
 
+/**
+ * Secret-free one-line source label for ops logs. URLs collapse to
+ * `scheme://host/…` (never params, userinfo, or raw magnets); refs are
+ * server-minted shorts; titles are bounded.
+ */
+export function describeAcquireSource(input: {
+  magnet?: string; url?: string; ref?: string; downloadUrl?: string; magnetUrl?: string; title?: string
+}): string {
+  const parts: string[] = []
+  if (input.ref !== undefined) parts.push(`ref=${input.ref}`)
+  else if (input.magnet !== undefined) parts.push(`magnet=${describeUrl(input.magnet)}`)
+  else if (input.magnetUrl !== undefined) parts.push(`magnetUrl=${describeUrl(input.magnetUrl)}`)
+  else if (input.downloadUrl !== undefined) parts.push(`downloadUrl=${describeUrl(input.downloadUrl)}`)
+  else if (input.url !== undefined) parts.push(`url=${describeUrl(input.url)}`)
+  else parts.push('source=(none)')
+  if (input.title !== undefined && input.title !== '') {
+    parts.push(`title="${input.title.length <= 60 ? input.title : `${input.title.slice(0, 60)}…`}"`)
+  }
+  return parts.join(' ')
+}
+
 /** Optional exactly-once wiring for the submit tool (registrar closes over the host ctx). */
 export interface CreateToolsHooks {
   ensureSubmitHook?: () => void
@@ -447,7 +469,8 @@ export function createTools(service: AcquireService, config: ResolvedConfig, hoo
       if (input.waitMs !== undefined && (!Number.isInteger(input.waitMs) || input.waitMs < 0)) {
         invalid('waitMs must be a non-negative integer')
       }
-      return await service.submit(
+      console.log(`[${submitName}] called ${describeAcquireSource(input)}`)
+      const submitted: AcquireResult = await service.submit(
         {
           ...(input.magnet !== undefined ? { magnet: input.magnet } : {}),
           ...(input.url !== undefined ? { url: input.url } : {}),
@@ -459,6 +482,8 @@ export function createTools(service: AcquireService, config: ResolvedConfig, hoo
         },
         exec.signal,
       )
+      console.log(`[${submitName}] done handle=${submitted.handle} state=${submitted.state} files=${submitted.files.length}${submitted.error !== undefined ? ` error=${submitted.error.slice(0, 120)}` : ''}`)
+      return submitted
     },
   })
 
@@ -482,7 +507,9 @@ export function createTools(service: AcquireService, config: ResolvedConfig, hoo
     async execute(args, exec) {
       const handle = (args as { handle?: string }).handle ?? ''
       if (handle === '') invalid('handle must not be empty')
-      return await service.status(handle, exec.signal)
+      const result: AcquireResult = await service.status(handle, exec.signal)
+      console.log(`[${statusName}] handle=${handle} state=${result.state} progress=${result.progress} files=${result.files.length}`)
+      return result
     },
   })
 

@@ -242,6 +242,11 @@ function invalid(message: string): never {
   throw new ProwlarrError(message, 'PROWLARR_INVALID_REQUEST')
 }
 
+/** Bound model-provided text for ops logs (length stays visible). */
+export function logText(value: string, max = 80): string {
+  return value.length <= max ? value : `${value.slice(0, max)}… (${value.length} chars)`
+}
+
 /**
  * Build the two tool definitions over one client and resolved config.
  * Exposed for tests and for hosts that register tools themselves.
@@ -333,6 +338,7 @@ export function createTools(client: ProwlarrClient, config: ResolvedConfig): [To
 
       const categories = args.categories !== undefined && args.categories.length > 0 ? args.categories : config.defaultCategories
       const type = args.type ?? config.defaultSearchType
+      console.log(`[${searchTool}] called query="${logText(query)}" type=${type} indexers=${indexerIds.length > 0 ? indexerIds.join(',') : 'all'} limit=${effectiveLimit}`)
       const releases = await client.search({
         query,
         type,
@@ -353,6 +359,7 @@ export function createTools(client: ProwlarrClient, config: ResolvedConfig): [To
           ...(release.magnetUrl !== undefined ? { magnetUrl: release.magnetUrl } : {}),
         })
       }
+      console.log(`[${searchTool}] done total=${releases.length} returned=${page.length} truncated=${releases.length > effectiveLimit}`)
       return {
         query,
         type,

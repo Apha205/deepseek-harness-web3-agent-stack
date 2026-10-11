@@ -91,6 +91,8 @@
 # ── Storage / chain ────────────────────────────────────────────────────
 - id: storage-arkiv
   config:
+    wallet: agent
+    privateKeyRef: AGENT_EVM_KEY
     rpcUrl: https://rpc.tiramisu.db-chain.testnet.arkiv.network
 
 - id: royalty-router

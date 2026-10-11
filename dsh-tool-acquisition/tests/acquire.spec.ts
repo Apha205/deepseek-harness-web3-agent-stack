@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
@@ -661,5 +661,36 @@ describe('registered tools', () => {
     expect((await call('acquire_submit', { url: `${filesUrl}/x`, waitMs: -1 })).isError).toBe(true)
     expect((await call('acquire_status', { handle: '' })).isError).toBe(true)
     expect((await call('acquire_status', { handle: 'acq_nope' })).isError).toBe(true)
+  })
+  it('logs called/done lines for ops', async () => {
+    routes['/song'] = { status: 200, body: 'ID3 fake-bytes' }
+    const { call } = await mount({ downloadDir: tmpRoot(), allowPrivateHosts: true })
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    let lines: string[] = []
+    try {
+      const submitted = await call('acquire_submit', { url: `${filesUrl}/song`, title: 'Song' })
+      expect(submitted.isError).toBe(false)
+      await call('acquire_status', { handle: (submitted.value as AcquireResult).handle })
+      lines = spy.mock.calls.map(args => String(args[0]))
+    } finally {
+      spy.mockRestore()
+    }
+    expect(lines.some(line => line.includes('[acquire_submit] called') && line.includes('title="Song"'))).toBe(true)
+    expect(lines.some(line => line.includes('[acquire_submit] done') && line.includes('state='))).toBe(true)
+    expect(lines.some(line => line.includes('[acquire_status]') && line.includes('state='))).toBe(true)
+  })
+})
+
+describe('ops-log source labels', () => {
+  it('labels refs, urls, and magnets without secrets', () => {
+    expect(AcquisitionPlugin.describeAcquireSource({ ref: 'pl_abc', title: 'T' })).toBe('ref=pl_abc title="T"')
+    const labeled = AcquisitionPlugin.describeAcquireSource({ downloadUrl: 'https://ix.example/dl?apikey=SECRET&x=1' })
+    expect(labeled).toBe('downloadUrl=https://ix.example/…')
+    expect(labeled).not.toContain('SECRET')
+    expect(AcquisitionPlugin.describeAcquireSource({ magnet: 'magnet:?xt=urn:btih:ABC' })).toBe('magnet=magnet:<…>')
+    expect(AcquisitionPlugin.describeAcquireSource({})).toBe('source=(none)')
+  })
+  it('bounds long titles', () => {
+    expect(AcquisitionPlugin.describeAcquireSource({ ref: 'r', title: 't'.repeat(100) })).toBe(`ref=r title="${'t'.repeat(60)}…"`)
   })
 })

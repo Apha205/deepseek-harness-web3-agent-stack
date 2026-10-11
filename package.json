@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "pnpm -r run build",
-    "typecheck": "tsc -b --noEmit || tsc --noEmit",
+    "typecheck": "pnpm -r --if-present run typecheck",
     "test": "vitest run"
   },
   "devDependencies": {
