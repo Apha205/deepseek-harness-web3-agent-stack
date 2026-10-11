@@ -18,6 +18,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Checkout sibling sources
+        run: |
+          set -euo pipefail
+          # file: deps resolve to siblings of the stack root (same pins as
+          # docker/Dockerfile — keep them in sync).
+          cd ..
+          git init -q haven-aol && cd haven-aol \
+            && git remote add origin https://github.com/Haven-hvn/haven-aol.git \
+            && git fetch -q --depth 1 origin 29327ae849f2fd10205828b089fedfbff5849837 \
+            && git checkout -q FETCH_HEAD && cd ..
+          git init -q mint-glue-graduate && cd mint-glue-graduate \
+            && git remote add origin https://github.com/Haven-hvn/mint-glue-graduate.git \
+            && git fetch -q --depth 1 origin 5f8b8b79f22e4d10508059c56874ee409d26b581 \
+            && git checkout -q FETCH_HEAD && cd ..
+
+      - name: Build sibling sources
+        run: |
+          set -euo pipefail
+          npm --prefix ../haven-aol/packages/typescript ci --no-audit --no-fund --ignore-scripts
+          npm --prefix ../haven-aol/packages/typescript run build
+          npm --prefix ../mint-glue-graduate/sdk ci --no-audit --no-fund --ignore-scripts
+          npm --prefix ../mint-glue-graduate/sdk run build
+
       - name: Enable pnpm via corepack
         run: |
           set -euo pipefail
