@@ -352,19 +352,19 @@ describe('registered tools', () => {
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {})
     let lines: string[] = []
     try {
-      await call('prowlarr_search', { query: 'tinashe popstar' })
+      await call('prowlarr_search', { query: 'the fictional zerotones' })
       lines = spy.mock.calls.map(args => String(args[0]))
     } finally {
       spy.mockRestore()
     }
-    expect(lines.some(line => line.includes('[prowlarr_search] called query="tinashe popstar"'))).toBe(true)
+    expect(lines.some(line => line.includes('[prowlarr_search] called query="the fictional zerotones"'))).toBe(true)
     expect(lines.some(line => line.includes('[prowlarr_search] done total=3 returned=3 truncated=false'))).toBe(true)
   })
 })
 
 describe('ops-log text bound', () => {
   it('passes short text through and bounds long text with length', () => {
-    expect(ProwlarrPlugin.logText('tinashe')).toBe('tinashe')
+    expect(ProwlarrPlugin.logText('zerotones')).toBe('zerotones')
     expect(ProwlarrPlugin.logText('x'.repeat(100))).toBe(`${'x'.repeat(80)}… (100 chars)`)
   })
 })

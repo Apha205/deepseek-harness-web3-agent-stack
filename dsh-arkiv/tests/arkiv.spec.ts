@@ -73,7 +73,7 @@ describe('arkiv output contracts', () => {
 describe('arkiv ops-log pointers', () => {
   const enc = (s: string) => new TextEncoder().encode(s)
   it('logs the piece pointer for gated payloads', () => {
-    // Ops incident: the Stevie single-block re-pointing landed on-chain
+    // Ops incident: a single-block re-pointing landed on-chain
     // with no journal trace. Write tools now log key + piece + txHash.
     expect(payloadPointer(enc(JSON.stringify({ piece: 'bafkzcibabc', gate: '{}' })))).toBe('piece=bafkzcibabc')
   })
