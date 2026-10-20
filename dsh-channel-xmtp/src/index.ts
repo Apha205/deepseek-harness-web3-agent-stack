@@ -156,8 +156,10 @@ export interface Config {
    * - `queue` (default): its own follow-up turn after the running one;
    * - `steer`: joins the running turn at its next step boundary (the model
    *   sees it mid-pipeline; pair with `replyMode: message` for a live answer).
+   * - `drop`: never enters the agent; the busy ack is the only reply and the
+   *   inbound is marked handled so restarts don't replay it.
    */
-  busyInbound?: 'queue' | 'steer'
+  busyInbound?: 'queue' | 'steer' | 'drop'
 }
 
 /** Config schema. */
@@ -175,7 +177,7 @@ export const Config: z<Config> = z.object({
   outboxPath: z.string(),
   replyMode: z.union(['turn', 'message']).default('turn'),
   busyAck: z.string().default(DEFAULT_BUSY_ACK),
-  busyInbound: z.union(['queue', 'steer']).default('queue'),
+  busyInbound: z.union(['queue', 'steer', 'drop']).default('queue'),
 })
 
 /** One image block an assistant message carried. */
@@ -960,20 +962,26 @@ class XmtpChannelRuntime {
       if (agent === undefined || this.stopped) return
       const busy = agent.status === 'running'
       if (busy) this.sendBusyAck(conversationId)
-      // `source.kind: 'user'` is load-bearing: tool-jobs refills its
-      // per-owner wake budget (maxConsecutiveWakes) only on user-sourced claims.
-      const userMessage = createUserMessage({ content: content as never, source: { kind: 'user' } })
-      this.pendingInbound.set(String(userMessage.id), { conversationId, inboundMessageId: message.id })
-      // Bounded like `seen`: an entry whose message is never claimed or discarded must not leak.
-      if (this.pendingInbound.size > MAX_DEDUP_SIZE) {
-        for (const id of this.pendingInbound.keys()) {
-          if (this.pendingInbound.size <= MAX_DEDUP_SIZE / 2) break
-          this.pendingInbound.delete(id)
+      // `drop`: the busy ack above is the whole reply. The message never
+      // enters the agent; it is still marked handled below so a restart
+      // doesn't replay stale chat.
+      const drop = busy && this.config.busyInbound === 'drop'
+      if (!drop) {
+        // `source.kind: 'user'` is load-bearing: tool-jobs refills its
+        // per-owner wake budget (maxConsecutiveWakes) only on user-sourced claims.
+        const userMessage = createUserMessage({ content: content as never, source: { kind: 'user' } })
+        this.pendingInbound.set(String(userMessage.id), { conversationId, inboundMessageId: message.id })
+        // Bounded like `seen`: an entry whose message is never claimed or discarded must not leak.
+        if (this.pendingInbound.size > MAX_DEDUP_SIZE) {
+          for (const id of this.pendingInbound.keys()) {
+            if (this.pendingInbound.size <= MAX_DEDUP_SIZE / 2) break
+            this.pendingInbound.delete(id)
+          }
         }
+        if (busy && this.config.busyInbound === 'steer') agent.steer(userMessage)
+        else agent.followup(userMessage)
       }
-      if (busy && this.config.busyInbound === 'steer') agent.steer(userMessage)
-      else agent.followup(userMessage)
-      console.log('[xmtp] admitted', conversationId.slice(0, 8), busy ? `(busy, ${this.config.busyInbound ?? 'queue'})` : '')
+      console.log(drop ? '[xmtp] dropped (busy, busyInbound: drop)' : '[xmtp] admitted', conversationId.slice(0, 8), busy ? `(busy, ${this.config.busyInbound ?? 'queue'})` : '')
       // The inbox splice is now in the session log; flush it before marking the
       // inbound handled so a crash cannot lose a message the outbox says arrived.
       await this.flushSession(agent)

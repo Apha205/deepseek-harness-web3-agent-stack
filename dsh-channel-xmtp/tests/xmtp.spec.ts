@@ -475,6 +475,29 @@ describe('busy inbound (never waits on a turn)', () => {
     world.onValue!(inbound())
     await vi.waitFor(() => { expect(conversation.sent).toEqual(['agent reply']) })
   })
+
+  it("drops a mid-turn inbound under busyInbound 'drop': ack only, never answered", async () => {
+    const { world, llm, conversation } = await harness({ busyAck: ACK, busyInbound: 'drop' })
+    const slow = gate()
+    llm.script.push({ text: 'first answer', gate: slow.promise })
+
+    world.onValue!(inbound({ id: 'msg-1' }))
+    await vi.waitFor(() => { expect(llm.requests).toHaveLength(1) })
+    world.onValue!(inbound({ id: 'msg-2', content: 'dropped?' }))
+
+    // The ack lands while the first turn is still running; the dropped
+    // message never reaches the model and starts no second turn.
+    await vi.waitFor(() => { expect(conversation.sent).toEqual([ACK]) })
+    await settle()
+    expect(llm.requests).toHaveLength(1)
+    expect(conversation.sent).toEqual([ACK])
+
+    slow.open()
+    await vi.waitFor(() => { expect(conversation.sent).toEqual([ACK, 'first answer']) })
+    await settle()
+    expect(conversation.sent).toEqual([ACK, 'first answer'])
+    expect(llm.requests).toHaveLength(1)
+  })
 })
 
 describe('replyMode: message', () => {
