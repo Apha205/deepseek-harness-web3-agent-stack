@@ -1,6 +1,6 @@
 # dsh-haven-aol
 
-Haven-AOL token-gated seal/decrypt for DeepSeek Harness: `ctx.aol` plus five model-facing tools over the `haven-aol` TypeScript SDK and the ICP backend canister (mainnet `gny6k-fqaaa-aaaab-ag3ra-cai`).
+Haven-AOL token-gated seal/decrypt/attest for DeepSeek Harness: `ctx.aol` plus six model-facing tools over the `haven-aol` TypeScript SDK and the ICP backend canister (mainnet `gny6k-fqaaa-aaaab-ag3ra-cai`).
 
 > TEMP: `haven-aol` is not on npm despite its README claim, so `package.json`
 > uses `file:../../haven-aol/packages/typescript` (requires `npm install` +
@@ -16,6 +16,7 @@ Haven-AOL token-gated seal/decrypt for DeepSeek Harness: `ctx.aol` plus five mod
 | `aol_market_cap` | read | v4 | Live cap in whole reserve units (300s canister burst cache). Fails closed client-side on non-Bond oracles. |
 | `aol_decrypt` | execute | v1/v3/v4 | Full gated decrypt; dispatches on metadata version. Keys never leave the call. |
 | `aol_seal` | execute | v1/v3/v4 | Harness-native encrypt: AES-GCM key (shared per epoch bucket for v3, fresh per seal for v1/v4, fresh IV always) + IBE wrap under the canister-fetched DPK. No wallet, no signature. |
+| `aol_attest_holding` | execute | — | Canister-signed holding attestation (`payload.attn`, haven-cli single shape bound to the record `sha256_ct`). One signature + one canister call per record; denials surface as tool errors. |
 
 Gate denials (`InsufficientBalance`, `MarketCapNotReached {required, actual}` in whole reserve units, `InvalidSignature`, `InvalidEpoch`, `InvalidOracle`) surface as tool errors the model can report verbatim.
 

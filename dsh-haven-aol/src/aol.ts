@@ -76,6 +76,18 @@ import {
 import type { VetKey } from '@icp-sdk/vetkeys'
 import { AolSigningError } from './types.ts'
 import {
+  type AttestFn,
+  type HavenSingleAttestation,
+  attestRequestDigest,
+  describeAttestError,
+  havenSingleAttestation,
+  liveAttestHolding,
+  loadReceiptLedger,
+  receiptSlot,
+  saveReceiptLedger,
+  RECEIPT_LEDGER_TTL_SECONDS,
+} from './attest.ts'
+import {
   EpochAesKeyCache,
   VetKeyCache,
   vetKeySlot,
@@ -103,7 +115,8 @@ export const internals: {
   requestV4: RequestV4Fn | undefined
   marketCap: MarketCapFn | undefined
   dpk: ((version: 1 | 3 | 4) => Promise<Uint8Array>) | undefined
-} = { requestV1: undefined, requestV3: undefined, requestV4: undefined, marketCap: undefined, dpk: undefined }
+  attest: AttestFn | undefined
+} = { requestV1: undefined, requestV3: undefined, requestV4: undefined, marketCap: undefined, dpk: undefined, attest: undefined }
 
 // ── Vendored v3/v4 IDL (backend.did GateRequestV3/GateRequestV4 + full GateError) ──
 // Mirrors the SDK's canister.ts factory style. Candid field order matches the
@@ -362,6 +375,26 @@ async function unwrapStageAsync<T>(stage: string, fn: () => Promise<T>): Promise
   }
 }
 
+/**
+ * Process-wide attestation dedup. Tool calls build one short-lived
+ * runtime per call, so per-runtime memory would never hit: the receipt
+ * mirror, the in-flight single-flight map, and the loaded-path set are
+ * module-level (the actorCache precedent). Receipts are immutable values
+ * keyed by their full binding, so sharing across runtimes and configs
+ * is safe — a receipt minted under one config is equally valid under
+ * another (same canister, same binding).
+ */
+const sharedReceipts = new Map<string, HavenSingleAttestation>()
+const attestPending = new Map<string, Promise<HavenSingleAttestation>>()
+const receiptsLoadedPaths = new Set<string>()
+
+/** TEST-ONLY: clear attestation dedup state between cases. */
+export function resetAttestDedup(): void {
+  sharedReceipts.clear()
+  attestPending.clear()
+  receiptsLoadedPaths.clear()
+}
+
 /** Chain variant → EIP-155 id (mirrors dsh-arkiv's reference table). */
 const CHAIN_VARIANT_TO_EIP155: Readonly<Record<string, number>> = {
   EthMainnet: 1,
@@ -382,6 +415,14 @@ export interface AolRuntimeOpts {
   eip712VerifyingContract?: string
   /** Raw-digest signer. Unset → every gated call throws AolSigningError (fail-loud). */
   signGate?: SignGate
+  /**
+   * Durable receipt ledger for attestHolding (e.g.
+   * `/data/haven-aol/receipts.json`). Set → a minted receipt is never
+   * re-minted for the same record (same binding replays the stored
+   * receipt with no signature and no canister call); unset → memory-only
+   * within this runtime (restarts can re-mint).
+   */
+  receiptsPath?: string
   /**
    * Durable key file (versioned JSON, 0600, atomic writes). Set →
    * epoch/vetKeys load once on first use and every fill persists
@@ -573,6 +614,130 @@ export class AolRuntime {
     const agent = await HttpAgent.create({ host: this.opts.icpHost, identity: new AnonymousIdentity() })
     if (this.opts.fetchRootKey) await agent.fetchRootKey()
     return agent
+  }
+
+  /**
+   * Merge the receipt ledger into the shared mirror once per path
+   * (no-op without receiptsPath or when already loaded) and drop
+   * expired shared entries. Best-effort — failures start empty, never
+   * throw. Concurrent first loads are idempotent merges, safe to race.
+   */
+  private async ensureReceipts(): Promise<void> {
+    const now = Math.floor(Date.now() / 1000)
+    for (const [slot, receipt] of sharedReceipts) {
+      if (now - receipt.timestamp > RECEIPT_LEDGER_TTL_SECONDS) sharedReceipts.delete(slot)
+    }
+    const path = this.opts.receiptsPath
+    if (path === undefined || path === '' || receiptsLoadedPaths.has(path)) return
+    receiptsLoadedPaths.add(path)
+    for (const [slot, receipt] of await loadReceiptLedger(path, now)) {
+      if (!sharedReceipts.has(slot)) sharedReceipts.set(slot, receipt)
+    }
+  }
+
+  /**
+   * Mint a canister-signed holding attestation (the `payload.attn` Haven
+   * single shape for media records). The canister checks
+   * `balanceOf(evmAddress) >= threshold` on the gate chain itself and binds
+   * the caller-chosen `cidHash` — for media records ALWAYS the record's
+   * `sha256_ct` (sha256 hex of the root locator string).
+   *
+   * Canister mints are expensive, so a minted receipt is never re-minted
+   * for the same binding: ledger hits (and in-flight duplicates) replay
+   * the stored receipt with no signature and no canister call. Reuse is
+   * correct here — the stored receipt binds exactly this record — and a
+   * call for another record (another cidHash) always misses and mints.
+   */
+  async attestHolding(params: {
+    evmAddress: string
+    chain: Chain
+    tokenAddress: string
+    threshold: bigint
+    cidHash: string
+    nonce?: bigint
+    eip712ChainId?: bigint
+    eip712VerifyingContract?: string
+  }): Promise<HavenSingleAttestation> {
+    if (!(params.chain in CHAIN_VARIANT_TO_EIP155)) {
+      throw new Error(`dsh-haven-aol: unknown chain variant ${JSON.stringify(params.chain)} (EthMainnet, EthSepolia, ArbitrumOne, BaseMainnet, OptimismMainnet)`)
+    }
+    if (params.threshold <= 0n) {
+      throw new Error('dsh-haven-aol: threshold must be > 0 (the canister rejects 0 with InvalidThreshold)')
+    }
+    const cidHash = params.cidHash.toLowerCase().replace(/^0x/, '')
+    if (!/^[0-9a-f]{64}$/.test(cidHash)) {
+      throw new Error('dsh-haven-aol: cidHash must be 64 hex characters (the record sha256_ct, no 0x)')
+    }
+    if (!/^0x[0-9a-fA-F]{40}$/.test(params.tokenAddress) || !/^0x[0-9a-fA-F]{40}$/.test(params.evmAddress)) {
+      throw new Error('dsh-haven-aol: tokenAddress and evmAddress must be 0x addresses')
+    }
+    const slot = receiptSlot(params.chain, params.tokenAddress, params.threshold.toString(), cidHash)
+    await this.ensureReceipts()
+    const hit = sharedReceipts.get(slot)
+    if (hit !== undefined) return hit
+    const pending = attestPending.get(slot)
+    if (pending !== undefined) return pending
+    const mint = this.mintAttestation(params, cidHash, slot).finally(() => {
+      if (attestPending.get(slot) === mint) attestPending.delete(slot)
+    })
+    attestPending.set(slot, mint)
+    return mint
+  }
+
+  /** One fresh mint: sign, call, echo-check, ledger, return. */
+  private async mintAttestation(
+    params: {
+      evmAddress: string
+      chain: Chain
+      tokenAddress: string
+      threshold: bigint
+      nonce?: bigint
+      eip712ChainId?: bigint
+      eip712VerifyingContract?: string
+    },
+    cidHash: string,
+    slot: string,
+  ): Promise<HavenSingleAttestation> {
+    const nonce = params.nonce ?? freshNonce()
+    const { eip712ChainId, eip712VerifyingContract } = this.gateDefaults(params, params.chain)
+    const digest = attestRequestDigest({
+      evmAddress: params.evmAddress, cidHash, nonce, eip712ChainId, eip712VerifyingContract,
+    })
+    const signature = await this.signOrThrow(digest)
+    if (signature.length !== 65) throw new Error('dsh-haven-aol: wallet returned a signature that is not 65 bytes')
+    if (signature[64] === 0 || signature[64] === 1) signature[64] += 27 // canister wants v ∈ {27, 28}
+    const agent = await this.agent()
+    const fn = internals.attest ?? liveAttestHolding
+    const result = await fn(agent, this.opts.canisterId, {
+      chain: params.chain,
+      tokenAddress: params.tokenAddress.toLowerCase(),
+      threshold: params.threshold,
+      cidHash,
+      evmAddress: params.evmAddress.toLowerCase(),
+      nonce,
+      signature,
+      eip712ChainId,
+      eip712VerifyingContract,
+    })
+    if ('err' in result) throw new Error(`dsh-haven-aol: attestHolding refused: ${describeAttestError(result.err)}`)
+    const receipt = havenSingleAttestation(
+      {
+        chain: params.chain, tokenAddress: params.tokenAddress, threshold: params.threshold,
+        cidHash, evmAddress: params.evmAddress, nonce, signature,
+        eip712ChainId, eip712VerifyingContract,
+      },
+      result.ok,
+    )
+    sharedReceipts.set(slot, receipt)
+    const path = this.opts.receiptsPath
+    if (path !== undefined && path !== '') {
+      const now = Math.floor(Date.now() / 1000)
+      const merged = await saveReceiptLedger(path, sharedReceipts, now)
+      // First-persisted-wins: serve the file's receipt on conflict (same
+      // binding either way) so concurrent runtimes converge on one mint.
+      return merged.get(slot) ?? receipt
+    }
+    return receipt
   }
 
   private async signOrThrow(digestHex: `0x${string}`): Promise<Uint8Array> {

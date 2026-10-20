@@ -1,13 +1,16 @@
 /**
  * dsh-haven-aol — Haven-AOL token-gated decryption for dsh.
  *
- * `ctx.aol` (AolRuntime) plus four model-facing tools over the `haven-aol`
+ * `ctx.aol` (AolRuntime) plus six model-facing tools over the `haven-aol`
  * TS SDK and the ICP backend canister:
  *
  * - `aol_gate_info` — parse any-version gate metadata (v1/v3/v4). Pure read.
  * - `aol_epoch` — current 30-day epoch + rollover. Pure read.
  * - `aol_market_cap` — live v4 market cap in whole reserve units. Read.
  * - `aol_decrypt` — end-to-end gated decrypt (v1/v3/v4 dispatch). Execute.
+ * - `aol_seal` — seal a file under a new token gate (v1/v3/v4). Execute.
+ * - `aol_attest_holding` — canister-signed holding attestation for media
+ *   records (`payload.attn`, haven-cli single shape). Execute.
  *
  * Custody: the EIP-712 gate signature is the only signing operation and it
  * goes through the signGate seam (default fail-loud AolSigningError —
@@ -16,8 +19,9 @@
  * epoch/vetKeys persist to keyStorePath when configured, else stay in
  * memory (see ./keyStore.ts).
  *
- * Deferred, deliberately absent: attestHolding (no wrapper in any SDK yet),
- * encrypt-side (IBE-encrypt against @icp-sdk/vetkeys unverified).
+ * Deferred, deliberately absent: batch (Merkle) attestation — single-record
+ * `aol_attest_holding` covers one release per call; batch only pays past
+ * dozens of records per run.
  *
  * @module dsh-haven-aol
  */
@@ -73,6 +77,13 @@ export interface Config {
    * Unset keeps the memory-only behavior (keys cleared on restart).
    */
   readonly keyStorePath?: string
+  /**
+   * Durable receipt ledger for aol_attest_holding (e.g.
+   * `/data/haven-aol/receipts.json`). Set → a minted receipt is never
+   * re-minted for the same record; unset → memory-only within the process
+   * (restarts can re-mint).
+   */
+  readonly receiptsPath?: string
 }
 
 export const Config: z<Config> = z.object({
@@ -83,6 +94,7 @@ export const Config: z<Config> = z.object({
   eip712ChainId: z.number(),
   eip712VerifyingContract: z.string(),
   keyStorePath: z.string(),
+  receiptsPath: z.string(),
 })
 
 interface WalletSeam {
@@ -141,6 +153,7 @@ export function apply(ctx: Context, config: Config): void {
     ...(config.eip712ChainId !== undefined ? { eip712ChainId: BigInt(config.eip712ChainId) } : {}),
     ...(config.eip712VerifyingContract !== undefined ? { eip712VerifyingContract: config.eip712VerifyingContract } : {}),
     ...(config.keyStorePath !== undefined ? { keyStorePath: config.keyStorePath } : {}),
+    ...(config.receiptsPath !== undefined ? { receiptsPath: config.receiptsPath } : {}),
     ...(testSignGate ? { signGate: testSignGate } : {}),
     // signGate stays unset otherwise: gate signing is fail-loud until a
     // vault signDigest (or the TEST-ONLY key above) is available.
@@ -152,6 +165,7 @@ export function apply(ctx: Context, config: Config): void {
     ...(config.eip712ChainId !== undefined ? { eip712ChainId: BigInt(config.eip712ChainId) } : {}),
     ...(config.eip712VerifyingContract !== undefined ? { eip712VerifyingContract: config.eip712VerifyingContract } : {}),
     ...(config.keyStorePath !== undefined ? { keyStorePath: config.keyStorePath } : {}),
+    ...(config.receiptsPath !== undefined ? { receiptsPath: config.receiptsPath } : {}),
   }
   /** Per-call runtime: vault signDigest first, TEST-ONLY key fallback, else fail-loud. */
   function runtimeForCall(wallet: WalletSeam): AolRuntime {
@@ -415,6 +429,67 @@ export function apply(ctx: Context, config: Config): void {
     presentCall: args => ({
       card: 'generic',
       title: `Haven-AOL seal ${basename(args.path ?? '')} (v${args.version ?? '?'})`,
+      kind: 'execute',
+    }),
+  })))
+
+  // ── aol_attest_holding (execute, one signature + one canister call) ────
+  // Mints the canister-signed holding attestation media records carry as
+  // `payload.attn` (haven-cli single shape, bound to the record sha256_ct).
+  // The canister checks balanceOf on the gate chain itself: denials
+  // (InsufficientBalance, InvalidSignature, NonceAlreadyUsed) surface as
+  // tool errors. Nonce is fresh per call — replays are rejected, so one
+  // call attests exactly one record.
+  ctx.effect(() => ctx.tools.register(defineTool({
+    name: 'aol_attest_holding',
+    description:
+      'Mint a Haven-AOL holding attestation for a media record: signs the EIP-712 AttestRequest with the agent wallet (raw digest via vault signDigest) and calls the canister attestHolding, which balance-checks the gate chain itself. Returns the payload-ready attn object {evmAddress, chain, tokenAddress, threshold, balanceAtCheck, cidHash, timestamp, signature}. For media records cidHash is ALWAYS the record sha256_ct (sha256 hex of the root locator string) — mint AFTER pinning, never before. One call per record; a reused receipt fails reader binding.',
+    parameters: {
+      chain: { type: 'string', required: true, description: 'SDK chain name (EthMainnet, EthSepolia, ArbitrumOne, BaseMainnet, OptimismMainnet).' },
+      tokenAddress: { type: 'string', required: true, description: 'Gate token contract address (0x...).' },
+      threshold: { type: 'string', required: true, description: 'Minimum balance in smallest token units (raw integer string). Must be > 0 and equal the gate threshold.' },
+      cidHash: { type: 'string', required: true, description: '64 hex chars (no 0x): the record sha256_ct (sha256 of the root locator string).' },
+      eip712ChainId: { type: 'number', description: 'EIP-712 domain chain id (falls back to plugin config, then the gate chain).' },
+      eip712VerifyingContract: { type: 'string', description: 'EIP-712 verifying contract (falls back to plugin config, then the zero verifier).' },
+      nonce: { type: 'string', description: 'Decimal nonce override (default: fresh random; canister rejects replays).' },
+    },
+    output: { schema: { type: 'object', additionalProperties: true } as never, render: (_a, v) => renderJson(v) as never },
+    execute: async (args: {
+      chain: string; tokenAddress: string; threshold: string; cidHash: string
+      eip712ChainId?: number; eip712VerifyingContract?: string; nonce?: string
+    }): Promise<unknown> => {
+      let threshold: bigint
+      try {
+        threshold = BigInt((args.threshold ?? '').trim())
+      } catch {
+        throw new Error('dsh-haven-aol: threshold must be a raw-integer string (smallest token units)')
+      }
+      let nonce: bigint | undefined
+      if (args.nonce !== undefined) {
+        try {
+          nonce = BigInt(args.nonce.trim())
+        } catch {
+          throw new Error('dsh-haven-aol: nonce must be a decimal integer string')
+        }
+        if (nonce < 0n) throw new Error('dsh-haven-aol: nonce must be non-negative')
+      }
+      const wallet = requireWallet(ctx)
+      const evmAddress = await wallet.address(config.wallet)
+      const rt = runtimeForCall(wallet)
+      return rt.attestHolding({
+        evmAddress,
+        chain: args.chain as Chain,
+        tokenAddress: args.tokenAddress,
+        threshold,
+        cidHash: args.cidHash,
+        ...(nonce !== undefined ? { nonce } : {}),
+        ...(args.eip712ChainId !== undefined ? { eip712ChainId: BigInt(args.eip712ChainId) } : {}),
+        ...(args.eip712VerifyingContract !== undefined ? { eip712VerifyingContract: args.eip712VerifyingContract } : {}),
+      })
+    },
+    presentCall: args => ({
+      card: 'generic',
+      title: `Haven-AOL attest ${args.tokenAddress ?? ''}`,
       kind: 'execute',
     }),
   })))
