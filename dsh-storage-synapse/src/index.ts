@@ -56,7 +56,7 @@ export const inject = ['wallet', 'tools']
 export interface Config {
   /** Configured `dsh-wallet` wallet name that identifies the payer. Required. */
   wallet: string
-  /** Filecoin RPC URL (e.g. wss://api.calibration.node.glif.io/rpc/v1). Required. */
+  /** Filecoin RPC URL (e.g. https://api.calibration.node.glif.io/rpc/v1). Required. Websocket schemes are normalized to HTTP(S) — Glif's wss endpoint fails SDK setup. */
   rpcUrl: string
   /** Filecoin network: calibration (default) or mainnet. */
   networkMode?: 'calibration' | 'mainnet'

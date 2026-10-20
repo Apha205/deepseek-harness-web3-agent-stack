@@ -3,7 +3,9 @@
  *
  * Port of the reference js-services/synapse-wrapper.ts (filecoin-pin +
  * @filoz/synapse-sdk) — Filecoin Onchain Cloud only, no Kubo/localhost.
- * Uploads pay USDFC on calibration/mainnet via wss://api.calibration.node.glif.io/rpc/v1.
+ * Uploads pay USDFC on calibration/mainnet via https://api.calibration.node.glif.io/rpc/v1
+ * (plain HTTPS — Glif's wss endpoint fails SDK setup; `wss://` configs are
+ * normalized to `https://` by normalizeRpcUrl).
  * No localhost:5001, no Kubo HTTP fallback.
  *
  * OWS upgrade (filecoin-pin 1.3.0 AccountConfig): Synapse is initialized
@@ -81,13 +83,28 @@ interface FilecoinBackendOpts {
   pieceLedgerPath?: string | undefined
 }
 
+/**
+ * Glif's calibration WebSocket endpoint fails SDK setup with viem's
+ * "An unknown RPC error occurred ... non-101 status code", while the same
+ * URL over HTTPS works. Normalize websocket schemes to plain HTTP(S) up
+ * front so a `wss://` rpcUrl can never break initialization — the SDK's
+ * subscriptions do not need a raw socket here (chain reads already go
+ * over HTTPS in `providerUrls`).
+ */
+export function normalizeRpcUrl(rpcUrl: string): string {
+  return rpcUrl.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:')
+}
+
 export class FilecoinBackend {
   private synapse: SynapseInstance | null = null
   /** Root CID → piece that carries it. checkPin verifies the piece live; without an entry it cannot map root→piece. */
   private readonly pieces = new Map<string, PieceLedgerEntry>()
   private ledgerLoaded = false
+  private readonly opts: FilecoinBackendOpts
 
-  constructor(private readonly opts: FilecoinBackendOpts) {}
+  constructor(opts: FilecoinBackendOpts) {
+    this.opts = { ...opts, rpcUrl: normalizeRpcUrl(opts.rpcUrl) }
+  }
 
   /** Load the persisted ledger once; missing/corrupt/legacy files start empty, never throw. */
   private async ensureLedger(): Promise<void> {

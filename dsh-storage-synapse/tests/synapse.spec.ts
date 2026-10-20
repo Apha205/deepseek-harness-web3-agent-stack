@@ -22,7 +22,7 @@ import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import * as storageSynapse from '../src/index.ts'
-import { FilecoinBackend, isProviderSelectionError, preview } from '../src/synapse.ts'
+import { FilecoinBackend, isProviderSelectionError, normalizeRpcUrl, preview } from '../src/synapse.ts'
 import type { SynapsePinnedEvent } from '../src/types.ts'
 import { MemoryCredentials } from '../../dsh-wallet/tests/helpers/memory-credentials.ts'
 
@@ -391,6 +391,17 @@ describe('provider selection: no default exclusions, one loud fallback', () => {
     const validated: any = storageSynapse.Config({ wallet: 'agent', rpcUrl: 'wss://api.calibration.node.glif.io/rpc/v1' } as any)
     expect(validated.excludeProviderIds).toEqual([])
     expect(validated.copies).toBe(1)
+  })
+
+  it('normalizes websocket RPC schemes to HTTP(S) — Glif wss breaks SDK setup', () => {
+    // Live incident: wss://api.calibration.node.glif.io/rpc/v1 fails
+    // initializeSynapse ("An unknown RPC error occurred ... non-101 status
+    // code") while the same URL over https works.
+    expect(normalizeRpcUrl('wss://api.calibration.node.glif.io/rpc/v1')).toBe('https://api.calibration.node.glif.io/rpc/v1')
+    expect(normalizeRpcUrl('ws://example.com/rpc')).toBe('http://example.com/rpc')
+    expect(normalizeRpcUrl('https://api.calibration.node.glif.io/rpc/v1')).toBe('https://api.calibration.node.glif.io/rpc/v1')
+    const backend = new FilecoinBackend({ getAccount: async () => ({}) as any, rpcUrl: 'wss://api.calibration.node.glif.io/rpc/v1' } as any)
+    expect((backend as any).opts.rpcUrl).toBe('https://api.calibration.node.glif.io/rpc/v1')
   })
 
   it('recognizes both SDK selection-failure spellings, nothing else', () => {
