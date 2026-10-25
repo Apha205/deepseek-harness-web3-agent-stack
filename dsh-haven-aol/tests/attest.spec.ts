@@ -163,7 +163,7 @@ describe('aol_attest_holding', () => {
         ok: {
           attestation: {
             evmAddress: HOLDER, tokenAddress: TOKEN, threshold: 1000000000000000000n,
-            balanceAtCheck: 2000000000000000000n, cidHash: CIDHASH, timestamp: 1790000000n,
+            balanceAtCheck: 2000000000000000000n, cidHash: CIDHASH, timestamp: BigInt(Math.floor(Date.now() / 1000)),
           },
           signature: new Uint8Array(64).fill(9),
         },
@@ -236,7 +236,7 @@ describe('receipt ledger', () => {
     cidHash: CIDHASH,
   }
 
-  function stubMint(calls: { n: number }, timestamp = 1790000000n) {
+  function stubMint(calls: { n: number }, timestamp = BigInt(Math.floor(Date.now() / 1000))) {
     internals.attest = async () => {
       calls.n += 1
       return {
@@ -306,7 +306,7 @@ describe('receipt ledger', () => {
         ok: {
           attestation: {
             evmAddress: HOLDER, tokenAddress: TOKEN, threshold: 1000000000000000000n,
-            balanceAtCheck: 2000000000000000000n, cidHash: CIDHASH, timestamp: 1790000000n,
+            balanceAtCheck: 2000000000000000000n, cidHash: CIDHASH, timestamp: BigInt(Math.floor(Date.now() / 1000)),
           },
           signature: new Uint8Array(64).fill(9),
         },
