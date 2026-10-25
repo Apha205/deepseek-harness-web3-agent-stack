@@ -70,6 +70,9 @@ export const inject = ['wallet', 'agents', 'agentDefaultModel', 'credentials']
 export const DEFAULT_MAX_RECONNECT_ATTEMPTS = 10
 export const DEFAULT_RECONNECT_DELAY_MS = 5_000
 export const CONSENT_SWEEP_INTERVAL_MS = 15_000
+/** Rate-limit backoff for the consent sweep: first cooldown, then doubling. */
+export const SWEEP_BACKOFF_BASE_MS = 60_000
+export const SWEEP_BACKOFF_MAX_MS = 30 * 60_000
 export const MAX_DEDUP_SIZE = 5_000
 /** Default busy acknowledgment; `busyAck: ''` disables it. */
 export const DEFAULT_BUSY_ACK = "Still working on the previous request — I'll get to this next."
@@ -291,6 +294,9 @@ class XmtpChannelRuntime {
   private stopped = false
   private timers = new Set<ReturnType<typeof setTimeout>>()
   private sweepTimer: ReturnType<typeof setInterval> | undefined
+  /** Cooldown after a rate-limited sweep; sweeps are skipped until it elapses. */
+  private sweepBackoffMs = 0
+  private sweepBackoffUntil = 0
   /** Dedup by message id, insertion-ordered so pruning drops the oldest half. */
   private readonly seen = new Set<string>()
   /**
@@ -556,7 +562,12 @@ class XmtpChannelRuntime {
   /** Consent auto-allow sweep, ported verbatim: individual failures are swallowed. */
   private async sweepConsent(client: XmtpClient, sdk: XmtpSdk): Promise<void> {
     try {
+      // Rate-limited: stay quiet so the XMTP quota can recover instead of
+      // re-hammering QueryWelcomeMessages every interval and never clearing.
+      if (Date.now() < this.sweepBackoffUntil) return
       await client.conversations.sync()
+      this.sweepBackoffMs = 0
+      this.sweepBackoffUntil = 0
       const conversations = await client.conversations.list()
       console.log(`[xmtp] sweep ${conversations.length} convos`)
       for (const conversation of conversations) {
@@ -572,7 +583,17 @@ class XmtpChannelRuntime {
         }
       }
     } catch (e) {
-      console.log(`[xmtp] sweep failed ${String((e as Error)?.message ?? e).slice(0, 200)}`)
+      const message = String((e as Error)?.message ?? e)
+      if (/rate.?limit|RESOURCE_EXHAUSTED|resource has been exhausted/i.test(message)) {
+        this.sweepBackoffMs = Math.min(
+          SWEEP_BACKOFF_MAX_MS,
+          Math.max(SWEEP_BACKOFF_BASE_MS, this.sweepBackoffMs * 2),
+        )
+        this.sweepBackoffUntil = Date.now() + this.sweepBackoffMs
+        console.log(`[xmtp] sweep rate-limited, backing off ${this.sweepBackoffMs}ms`)
+        return
+      }
+      console.log(`[xmtp] sweep failed ${message.slice(0, 200)}`)
     }
   }
 
