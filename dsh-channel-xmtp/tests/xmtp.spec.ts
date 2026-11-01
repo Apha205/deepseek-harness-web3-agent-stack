@@ -155,6 +155,7 @@ interface FakeWorld {
   onError: ((error: Error) => void) | undefined
   createFailures: number
   streamEnds: number
+  syncCalls: number
 }
 
 /** Install a scripted SDK on the test seam and return its world. */
@@ -167,6 +168,7 @@ function fakeSdk(): FakeWorld {
     onError: undefined,
     createFailures: 0,
     streamEnds: 0,
+    syncCalls: 0,
   }
   internals.sdk = {
     async createClient(signer, options) {
@@ -179,7 +181,7 @@ function fakeSdk(): FakeWorld {
       const client: XmtpClient = {
         inboxId: 'own-inbox',
         conversations: {
-          async sync() {},
+          async sync() { world.syncCalls += 1 },
           async list() {
             return [...world.conversations.values()]
           },
@@ -364,6 +366,18 @@ describe('direct agent↔user round trip', () => {
     const userMessage = messages.findLast(message => message.role === 'user')
     expect(JSON.stringify(userMessage?.content)).toContain('hello agent')
     expect(outbounds).toEqual([{ conversationId: 'conv-1', kind: 'reply', turn: expect.any(Number), inboundMessageId: 'msg-1' }])
+  })
+
+  it('does not sync the welcome queue again to deliver a reply (rate-limit budget)', async () => {
+    const { world, conversation } = await harness()
+    // Exactly one sync so far: the connect-time consent sweep.
+    expect(world.syncCalls).toBe(1)
+
+    world.onValue!(inbound())
+
+    await vi.waitFor(() => { expect(conversation.sent).toEqual(['agent reply']) })
+    await settle()
+    expect(world.syncCalls).toBe(1)
   })
 
   it('reuses one agent per conversation and answers each message once, in order', async () => {

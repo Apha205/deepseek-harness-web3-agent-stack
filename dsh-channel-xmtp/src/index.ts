@@ -70,6 +70,15 @@ export const inject = ['wallet', 'agents', 'agentDefaultModel', 'credentials']
 export const DEFAULT_MAX_RECONNECT_ATTEMPTS = 10
 export const DEFAULT_RECONNECT_DELAY_MS = 5_000
 export const CONSENT_SWEEP_INTERVAL_MS = 15_000
+/**
+ * Minimum spacing between welcome-queue syncs. `conversations.sync()` hits
+ * XMTP's rate-limited QueryWelcomeMessages endpoint; at the 15s sweep
+ * cadence it alone exhausts the per-IP quota (R23.95), which then also
+ * blocks new-conversation discovery for every client on the host. The live
+ * message stream already surfaces new conversations, so the sweep sync is
+ * only a slow backstop — five minutes is ample.
+ */
+export const SWEEP_SYNC_INTERVAL_MS = 5 * 60_000
 /** Rate-limit backoff for the consent sweep: first cooldown, then doubling. */
 export const SWEEP_BACKOFF_BASE_MS = 60_000
 export const SWEEP_BACKOFF_MAX_MS = 30 * 60_000
@@ -297,6 +306,8 @@ class XmtpChannelRuntime {
   /** Cooldown after a rate-limited sweep; sweeps are skipped until it elapses. */
   private sweepBackoffMs = 0
   private sweepBackoffUntil = 0
+  /** Last welcome-queue sync attempt; the sweep syncs at most once per {@link SWEEP_SYNC_INTERVAL_MS}. */
+  private lastSweepSyncAt = 0
   /** Dedup by message id, insertion-ordered so pruning drops the oldest half. */
   private readonly seen = new Set<string>()
   /**
@@ -565,7 +576,13 @@ class XmtpChannelRuntime {
       // Rate-limited: stay quiet so the XMTP quota can recover instead of
       // re-hammering QueryWelcomeMessages every interval and never clearing.
       if (Date.now() < this.sweepBackoffUntil) return
-      await client.conversations.sync()
+      // Throttled: the consent pass below reads the local conversation list,
+      // which the live stream keeps current; syncing the welcome queue on
+      // every 15s sweep is what exhausts the XMTP rate-limit quota.
+      if (Date.now() - this.lastSweepSyncAt >= SWEEP_SYNC_INTERVAL_MS) {
+        this.lastSweepSyncAt = Date.now()
+        await client.conversations.sync()
+      }
       this.sweepBackoffMs = 0
       this.sweepBackoffUntil = 0
       const conversations = await client.conversations.list()
@@ -900,7 +917,10 @@ class XmtpChannelRuntime {
   private async conversation(conversationId: string): Promise<XmtpConversation | undefined> {
     const client = this.client
     if (client === undefined) throw new NotConnectedError('not connected')
-    try { await client.conversations.sync() } catch {}
+    // No sync here: this lookup runs on every send, and syncing hits the
+    // rate-limited welcome-queue endpoint. The local db (kept current by
+    // the live stream and the throttled sweep sync) already holds every
+    // conversation this channel serves.
     return client.conversations.getConversationById(conversationId)
   }
 
