@@ -484,6 +484,30 @@ describe('busy inbound (never waits on a turn)', () => {
     expect(ids).toEqual(['msg-1', 'msg-2', 'msg-3'])
   })
 
+  it("coalesces mid-turn inbounds into ONE follow-up turn under busyInbound 'coalesce'", async () => {
+    const { world, llm, conversation } = await harness({ busyAck: ACK, busyInbound: 'coalesce' })
+    const slow = gate()
+    llm.script.push({ text: 'first answer', gate: slow.promise }, 'merged answer')
+
+    world.onValue!(inbound({ id: 'msg-1' }))
+    await vi.waitFor(() => { expect(llm.requests).toHaveLength(1) })
+    world.onValue!(inbound({ id: 'msg-2', content: 'status?' }))
+    world.onValue!(inbound({ id: 'msg-3', content: 'hello??' }))
+
+    await vi.waitFor(() => { expect(conversation.sent).toEqual([ACK]) })
+    await settle()
+    expect(llm.requests).toHaveLength(1)
+
+    slow.open()
+    // One merged follow-up turn (not one per line), answered once.
+    await vi.waitFor(() => { expect(conversation.sent).toEqual([ACK, 'first answer', 'merged answer']) })
+    await settle()
+    expect(llm.requests).toHaveLength(2)
+    const merged = JSON.stringify(llm.requests[1]!.messages)
+    expect(merged).toContain('status?')
+    expect(merged).toContain('hello??')
+  })
+
   it('does not ack an inbound that reaches an idle agent', async () => {
     const { world, conversation } = await harness({ busyAck: ACK })
     world.onValue!(inbound())

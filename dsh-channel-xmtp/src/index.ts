@@ -170,8 +170,11 @@ export interface Config {
    *   sees it mid-pipeline; pair with `replyMode: message` for a live answer).
    * - `drop`: never enters the agent; the busy ack is the only reply and the
    *   inbound is marked handled so restarts don't replay it.
+   * - `coalesce`: mid-turn lines are buffered and merged into ONE follow-up
+   *   turn when the agent goes idle, so a chatty room gets one current
+   *   answer instead of a queue of stale one-by-one replies.
    */
-  busyInbound?: 'queue' | 'steer' | 'drop'
+  busyInbound?: 'queue' | 'steer' | 'drop' | 'coalesce'
 }
 
 /** Config schema. */
@@ -189,7 +192,7 @@ export const Config: z<Config> = z.object({
   outboxPath: z.string(),
   replyMode: z.union(['turn', 'message']).default('turn'),
   busyAck: z.string().default(DEFAULT_BUSY_ACK),
-  busyInbound: z.union(['queue', 'steer', 'drop']).default('queue'),
+  busyInbound: z.union(['queue', 'steer', 'drop', 'coalesce']).default('queue'),
 })
 
 /** One image block an assistant message carried. */
@@ -339,6 +342,8 @@ class XmtpChannelRuntime {
   private readonly pendingInbound = new Map<string, { conversationId: string; inboundMessageId: string }>()
   /** `conversationId\nturn` → the XMTP inbound that turn answers. */
   private readonly turnInbound = new Map<string, string>()
+  /** Buffered mid-turn lines under `busyInbound: coalesce`, per conversation. */
+  private readonly coalesced = new Map<string, { contents: unknown[]; lastInboundId: string }>()
   /** Conversations already acked during their agent's current running interval. */
   private readonly acked = new Set<string>()
   /** Serialized outbox persistence (one writer at a time; last state wins). */
@@ -668,6 +673,18 @@ class XmtpChannelRuntime {
       if (conversationId === undefined) return
       if (status === 'idle') {
         this.acked.delete(conversationId)
+        // Coalesced lines become one follow-up turn now that we're idle.
+        const buf = this.coalesced.get(conversationId)
+        if (buf !== undefined && buf.contents.length > 0) {
+          this.coalesced.delete(conversationId)
+          const agent = this.liveAgent(conversationId)
+          if (agent !== undefined) {
+            const userMessage = createUserMessage({ content: buf.contents as never, source: { kind: 'user' } })
+            this.pendingInbound.set(String(userMessage.id), { conversationId, inboundMessageId: buf.lastInboundId })
+            agent.followup(userMessage)
+            console.log('[xmtp] coalesce flush', conversationId.slice(0, 8), `blocks=${buf.contents.length}`)
+          }
+        }
         // Safety net: anything committed but not yet flushed goes out now.
         this.scheduleFlush(conversationId)
       }
@@ -1007,6 +1024,20 @@ class XmtpChannelRuntime {
       // enters the agent; it is still marked handled below so a restart
       // doesn't replay stale chat.
       const drop = busy && this.config.busyInbound === 'drop'
+      if (busy && this.config.busyInbound === 'coalesce') {
+        // Buffer instead of queueing a turn per line: merged into one
+        // follow-up when the agent goes idle (see agent/status handler).
+        const buf = this.coalesced.get(conversationId) ?? { contents: [], lastInboundId: message.id }
+        buf.contents.push(...(content as unknown[]))
+        buf.lastInboundId = message.id
+        this.coalesced.set(conversationId, buf)
+        console.log('[xmtp] coalesced', conversationId.slice(0, 8), `buffered=${buf.contents.length}`)
+        const key = XmtpChannelRuntime.outboxKey(conversationId, message.id)
+        if (!this.outbox.has(key)) this.outbox.set(key, OUTBOX_ACCEPTED)
+        this.pruneOutbox()
+        await this.persist()
+        return
+      }
       if (!drop) {
         // `source.kind: 'user'` is load-bearing: tool-jobs refills its
         // per-owner wake budget (maxConsecutiveWakes) only on user-sourced claims.
