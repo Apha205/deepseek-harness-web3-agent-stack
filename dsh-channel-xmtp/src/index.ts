@@ -309,6 +309,8 @@ class XmtpChannelRuntime {
   /** Cooldown after a rate-limited sweep; sweeps are skipped until it elapses. */
   private sweepBackoffMs = 0
   private sweepBackoffUntil = 0
+  /** Last logged conversation count (sweep log only on change). */
+  private lastSweepCount = -1
   /** Last welcome-queue sync attempt; the sweep syncs at most once per {@link SWEEP_SYNC_INTERVAL_MS}. */
   private lastSweepSyncAt = 0
   /** Dedup by message id, insertion-ordered so pruning drops the oldest half. */
@@ -593,7 +595,12 @@ class XmtpChannelRuntime {
       this.sweepBackoffMs = 0
       this.sweepBackoffUntil = 0
       const conversations = await client.conversations.list()
-      console.log(`[xmtp] sweep ${conversations.length} convos`)
+      // Success-path sweep line only when the count changes — a constant
+      // every-15s line buries real failures in the log.
+      if (conversations.length !== this.lastSweepCount) {
+        this.lastSweepCount = conversations.length
+        console.log(`[xmtp] sweep ${conversations.length} convos`)
+      }
       for (const conversation of conversations) {
         try {
           const cs = conversation.consentState()
