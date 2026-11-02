@@ -584,9 +584,11 @@ class XmtpChannelRuntime {
       // Throttled: the consent pass below reads the local conversation list,
       // which the live stream keeps current; syncing the welcome queue on
       // every 15s sweep is what exhausts the XMTP rate-limit quota.
+      let syncedThisSweep = false
       if (Date.now() - this.lastSweepSyncAt >= SWEEP_SYNC_INTERVAL_MS) {
         this.lastSweepSyncAt = Date.now()
         await client.conversations.sync()
+        syncedThisSweep = true
       }
       this.sweepBackoffMs = 0
       this.sweepBackoffUntil = 0
@@ -602,6 +604,22 @@ class XmtpChannelRuntime {
           }
         } catch (e) {
           console.log(`[xmtp] sweep consent fail ${String((e as Error)?.message ?? e).slice(0, 120)}`)
+        }
+      }
+      // Backfill (only on sync sweeps to bound cost): admit recent
+      // messages the live stream missed — e.g. delivered while the
+      // stream was down or before the conversation was discovered.
+      // onMessage re-applies every filter (own/outbox/dedup), so
+      // already-handled messages are skipped, never double-answered.
+      if (syncedThisSweep) {
+        for (const conversation of conversations) {
+          try {
+            if (typeof conversation.messages !== 'function') continue
+            const recent = (await conversation.messages()).slice(-25)
+            for (const message of recent) this.onMessage(message)
+          } catch (e) {
+            console.log(`[xmtp] backfill fail ${String((e as Error)?.message ?? e).slice(0, 120)}`)
+          }
         }
       }
     } catch (e) {

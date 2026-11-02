@@ -46,6 +46,8 @@ export interface XmtpRemoteAttachment {
 
 /** One conversation handle. */
 export interface XmtpConversation {
+  /** Recent messages (stream-miss backfill); optional in the port. */
+  messages?(): Promise<XmtpDecodedMessage[]>
   sendText(text: string): Promise<unknown>
   sendAttachment?(attachment: XmtpAttachment): Promise<unknown>
   sendRemoteAttachment?(remoteAttachment: XmtpRemoteAttachment): Promise<unknown>

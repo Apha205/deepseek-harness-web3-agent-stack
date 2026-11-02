@@ -121,9 +121,15 @@ class FakeConversation implements XmtpConversation {
   readonly sent: string[] = []
   consent: unknown
   readonly consentUpdates: unknown[] = []
+  /** History the live stream never delivered (backfill source). */
+  history: import('../src/xmtp.ts').XmtpDecodedMessage[] = []
 
   constructor(consent: unknown) {
     this.consent = consent
+  }
+
+  async messages(): Promise<import('../src/xmtp.ts').XmtpDecodedMessage[]> {
+    return this.history
   }
 
   async sendText(text: string): Promise<string> {
@@ -535,6 +541,30 @@ describe('busy inbound (never waits on a turn)', () => {
     await settle()
     expect(conversation.sent).toEqual([ACK, 'first answer'])
     expect(llm.requests).toHaveLength(1)
+  })
+})
+
+describe('stream-miss backfill', () => {
+  it('admits a message the stream never delivered on the next sync sweep', async () => {
+    const { world, conversation } = await harness()
+    // The stream never fires for this one; only history holds it.
+    conversation.history = [{
+      id: 'msg-missed',
+      conversationId: 'conv-1',
+      senderInboxId: 'someone-else',
+      content: 'missed hello',
+      sentAt: new Date(),
+    } as never]
+    const rt = runtime()
+    rt.lastSweepSyncAt = 0
+    await rt.sweepConsent(rt.client, rt.sdk)
+    await vi.waitFor(() => { expect(conversation.sent).toEqual(['agent reply']) })
+    // A second sweep does not re-answer it (dedup/outbox).
+    rt.lastSweepSyncAt = 0
+    await rt.sweepConsent(rt.client, rt.sdk)
+    await settle()
+    expect(conversation.sent).toEqual(['agent reply'])
+    expect(world.onValue).toBeDefined()
   })
 })
 
