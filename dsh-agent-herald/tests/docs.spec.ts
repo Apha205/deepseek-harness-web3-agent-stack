@@ -85,6 +85,24 @@ describe('agent docs', () => {
     }
   })
 
+  it('process §1: autonomy contract — a fetch/release request runs the full pipeline', () => {
+    const process = loadAgentDoc('process.md')
+    for (const anchor of [
+      'Autonomy contract',
+      'one continuous run',
+      'Downloading is stage 0, not the deliverable',
+      'Defaults when unspecified',
+      'Stage boundaries are not turn boundaries',
+    ]) {
+      expect(process).toContain(anchor)
+    }
+    const soul = loadAgentDoc('soul.md')
+    expect(soul).toContain('standing\n  authorization for the whole testnet pipeline')
+    expect(soul).not.toContain('final confirmation')
+    const workflow = loadAgentDoc('workflow.md')
+    expect(workflow).toContain('one continuous job for any medium')
+  })
+
   it('process §10: long work runs in the background and silence is a valid answer', () => {
     const process = loadAgentDoc('process.md')
     for (const anchor of [

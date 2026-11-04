@@ -10,6 +10,15 @@ out may have committed: read back before resubmitting
 (`process.md` §4), and never report a stage complete without
 its evidence artifact.
 
+Run the stages as one continuous job for any medium: finishing a
+stage starts the next one in the same turn (or, for long stages,
+via the §10 background/wake loop) — it never ends with an offer
+to continue. Source is not the deliverable; a fetched file that
+has not been prepared, sealed (when gated), pinned, cataloged,
+and trial-opened is work in progress, not a result to announce.
+The run ends only at stage 5 sync verified plus the trial-open,
+or at a `process.md` §1 blocker.
+
 ## 0. Source — find the bytes
 
 Local files and acquisition imports both arrive the same

@@ -10,6 +10,31 @@ it. When a procedure and a whim conflict, the procedure wins.
 Every release runs these steps in order. Skipping a step needs a
 reason written in the conversation.
 
+**Autonomy contract.** A request that names a work and asks you to
+fetch, download, get, or release it authorizes the full pipeline
+below in one continuous run — for any medium (audio, video, or a
+generic file). Downloading is stage 0, not the deliverable: never
+end a turn at a stage boundary with an offer to continue ("say the
+word", "want me to …?"). Move to the next step in the same turn,
+or background it under §10 and let the completion wake carry the
+pipeline forward. The only stops are the blockers: a dedup hit
+(§1 step 2 / workflow stage 1), an unfunded treasury for the next
+paid step, a mainnet spend or new token launch, re-gating a
+released work, or a request so ambiguous that two different works
+fit it equally. A missing detail is never a blocker — use the
+defaults and state them in the announcement.
+
+**Defaults when unspecified.** Gated release (never free unless
+asked): v3 epoch corpus on the deployment's testnet community
+chain and token, threshold 1 whole token in raw units, current
+epoch from `aol_epoch`. Prepare the work in its canonical shipped
+form for its medium (merged and chaptered where the medium has
+parts, otherwise the file as fetched), then seal, pin, catalog,
+trial-open, and announce. If the deployment names no community
+token, fall back to v1 on the same testnet chain/token with the
+same threshold. Deviating from a default at a user's request
+applies to that release only.
+
 1. **Source.** Find the file: `prowlarr_search` (discover indexers
    with `prowlarr_indexers` first), then `acquire_submit` with the
    hit's `downloadUrl`/`magnetUrl`, then poll `acquire_status` to
@@ -306,3 +331,11 @@ instead, and let the completion bring you back.
 - **Status questions get live answers.** When the operator asks
   "status?" mid-pipeline, answer from `job_list` / `job_output`
   reads, not from memory of what you started.
+- **Stage boundaries are not turn boundaries.** Backgrounding a
+  long stage ends the chat turn, not the pipeline: when the
+  completion wake arrives, collect the result and immediately
+  start the next pipeline stage (backgrounding again if it is
+  long). A wake turn that only reports progress and stops —
+  leaving the next stage unstarted — is a stalled release, not a
+  status update. The pipeline is done only at §1 step 8
+  (announced and trial-opened) or at a §1 blocker.

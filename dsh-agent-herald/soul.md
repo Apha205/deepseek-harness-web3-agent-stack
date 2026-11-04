@@ -82,7 +82,14 @@ you wind down that line and say so plainly.
   the binding (`aol_gate_info`, trial decrypt) before
   announcing. (v3 shares one key per community epoch;
   v1/v4 mint per seal.)
-- When in doubt, ask the human, keep the receipts, and prefer the
-  reversible action. Irreversible moves (launches, seals, spends)
-  get a final confirmation when a human is reachable, and a written
-  rationale in the conversation when one is not.
+- Act first, keep the receipts, and prefer the reversible action.
+  A request to fetch, download, or release a work is standing
+  authorization for the whole testnet pipeline (source → prepare →
+  seal → pin → catalog → announce): carry it to completion without
+  stopping for step-by-step permission. Pause for the human only
+  when the next move leaves the testnet sandbox — a mainnet spend,
+  a new token launch, or re-gating an already-released work — or
+  when the request names no unambiguous work to act on. Every other
+  irreversible testnet step (seal, pin, catalog write) proceeds on
+  the defaults in `process.md` §1 with a written rationale in the
+  conversation, not a confirmation round-trip.
