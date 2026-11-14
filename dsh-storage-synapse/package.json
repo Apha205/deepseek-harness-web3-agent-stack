@@ -41,7 +41,7 @@
     "@deepseek-ai/schemastery": "~3.18.5-alpha.1",
     "filecoin-pin": "=2.1.1",
     "@filoz/synapse-sdk": "=2.0.2",
-    "@filoz/synapse-core": "=0.10.0",
+    "@filoz/synapse-core": "=0.11.0",
     "ethers": "=6.17.0",
     "multiformats": "=14.0.5",
     "viem": "=2.56.9"
