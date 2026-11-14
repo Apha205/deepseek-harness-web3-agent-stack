@@ -589,7 +589,16 @@ describe('exactly-once across restarts', () => {
     const { tmpdir } = await import('node:os')
     const { join } = await import('node:path')
     const dir = await mkdtemp(join(tmpdir(), 'xmtp-outbox-'))
-    return { path: join(dir, 'outbox.json'), cleanup: () => rm(dir, { recursive: true, force: true }) }
+    return {
+      path: join(dir, 'outbox.json'),
+      cleanup: async () => {
+        // Stop the channel before removing the dir: stop() drains in-flight
+        // send tails and persists, so no stray write can recreate the
+        // outbox file (or its tmp sibling) mid-rm (ENOTEMPTY rmdir).
+        try { await runtime()?.stop() } catch { /* channel never started */ }
+        await rm(dir, { recursive: true, force: true })
+      },
+    }
   }
 
   async function readState(path: string) {
