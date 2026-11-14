@@ -270,8 +270,7 @@ function recordWrite(
       isError: outcome.isError,
     }),
     ...(outcome.code !== undefined ? { error: { name: 'Error', code: outcome.code } } : {}),
-    surfaceOp: 'append',
-  })
+  }, { surfaceOp: 'append' })
 }
 
 function appendUserMessage(session: Session, kind: 'user' | 'exactly-once-test'): void {

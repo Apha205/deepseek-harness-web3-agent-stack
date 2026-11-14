@@ -255,6 +255,10 @@ describe('exactly-once: timeout-after-broadcast + read-back (real register path)
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
     await ctx.plugin(NativeToolExecutor)
+    const { default: SessionStore } = await import('@deepseek-ai/dsh-session')
+    const { default: SessionProjectionRegistry } = await import('@deepseek-ai/dsh-session-projection')
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionProjectionRegistry)
     const mockSynapse: any = {
       store: vi.fn(async (data: Uint8Array) => ({ cid: CID, pieceCid: 'bafkpiece123' })),
     }

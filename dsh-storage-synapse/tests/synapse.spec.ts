@@ -235,6 +235,10 @@ describe('exactly-once: content ledger + pin read-back (real runtime path)', () 
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
     await ctx.plugin(NativeToolExecutor)
+    const { default: SessionStore } = await import('@deepseek-ai/dsh-session')
+    const { default: SessionProjectionRegistry } = await import('@deepseek-ai/dsh-session-projection')
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionProjectionRegistry)
     await ctx.plugin(storageSynapse, {
       wallet: 'agent',
       rpcUrl: 'wss://api.calibration.node.glif.io/rpc/v1',

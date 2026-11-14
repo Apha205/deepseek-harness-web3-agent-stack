@@ -24,7 +24,7 @@ import Storage, { storageBackendServiceKey } from '@deepseek-ai/dsh-storage'
 import * as storageDomain from '@deepseek-ai/dsh-storage-domain'
 import TokenMeter from '@deepseek-ai/dsh-token-meter'
 import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
-import ToolRuntime, { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
+import ToolRuntime, { defineTool } from '@deepseek-ai/dsh-tools'
 import * as treasury from '../src/index.ts'
 import * as treasuryPolicy from '../src/policy.ts'
 import { MemoryStorageBackend } from './helpers/memory-backend.ts'
@@ -78,13 +78,17 @@ describe('tools/pre-execute gate (through the executor)', () => {
     })
     const ran: string[] = []
     for (const toolName of ['paid_action', 'paid_infra', 'free_action']) {
-      ctx.tools.register(defineContentToolFixture({
+      ctx.tools.register(defineTool({
         name: toolName,
         description: 'test tool',
         parameters: {},
+        output: {
+          schema: { type: 'string' },
+          render: (_args, value) => [{ type: 'text' as const, text: value }],
+        },
         async execute() {
           ran.push(toolName)
-          return [{ type: 'text' as const, text: 'done' }]
+          return 'done'
         },
       }))
     }
