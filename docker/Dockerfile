@@ -2,7 +2,7 @@
 # All state lives in /data (keys, profile, service data). First boot runs
 # instantiation (keys, testnet profile, indexers); every boot starts the
 # supervisor tree. See README.md for run instructions.
-FROM node:22.23-bookworm-slim
+FROM node:24-bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
     DSH_TELEMETRY_DISABLED=1 \
@@ -43,7 +43,7 @@ RUN case "${TARGETARCH}" in \
 # Published CLIs (pinned) + pnpm for profile assembly. dsh gates every
 # plugin's @deepseek-ai/dsh-* peers against this runtime version at
 # `dsh plugin add` and profile boot, so this pin must equal the stack's peers.
-RUN npm i -g @deepseek-ai/dsh@0.2.1-alpha.1 @xmtp/convos-cli@0.10.23 pnpm@11.7.0 \
+RUN npm i -g @deepseek-ai/dsh@0.2.2-rc.3 @xmtp/convos-cli@0.10.23 pnpm@11.7.0 \
     && npm cache clean --force
 
 # Agent helper runtime: keys.mjs resolves these from sibling node_modules

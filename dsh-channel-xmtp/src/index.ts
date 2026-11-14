@@ -44,7 +44,7 @@ import { dirname, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
-import type { Agent, AgentHandle, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -1189,10 +1189,13 @@ class XmtpChannelRuntime {
     }
     const selection = this.ctx.agentDefaultModel.currentSelection()
     const sessionId = this.sessionIdFor(conversationId)
-    const agentOptions = { provider: selection.provider, model: selection.model }
+    const agentOptions = {
+      provider: selection.provider,
+      model: selection.model,
+      ...selection.reasoningEffort !== undefined ? { reasoningEffort: selection.reasoningEffort } : {},
+    }
     const setup = (agentCtx: Context) => {
-      const selected: ModelSelectionRef = { current: selection, assembled: undefined }
-      installModelSelection(agentCtx, selected)
+      installModelSelection(agentCtx)
     }
     // Sessions persist across restarts while this map does not: recreating an
     // agent for a known conversation resumes the persisted session instead of

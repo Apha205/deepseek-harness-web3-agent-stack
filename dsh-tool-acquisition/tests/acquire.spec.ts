@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { Context } from '@deepseek-ai/cordis'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import * as AcquisitionPlugin from '../src/index.ts'
 import { AcquireService, isDefinitePreQueue, refKeyFor, torrentKeyFor, urlKeyFor } from '../src/acquire.ts'
@@ -622,10 +623,16 @@ async function mount(config: AcquisitionPlugin.Config = {}): Promise<{
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
+  await ctx.plugin(NativeToolExecutor)
   await ctx.plugin(AcquisitionPlugin, config)
   let n = 0
-  const call = (name: string, args: unknown): Promise<{ isError: boolean; value: unknown; content: ReadonlyArray<{ type: string; text?: string }> }> =>
-    ctx.tools.execute({ signal: new AbortController().signal, callId: ToolCallId(`c${String(++n)}`), name, arguments: args }) as never
+  const call = async (name: string, args: unknown): Promise<{ isError: boolean; value: unknown; content: ReadonlyArray<{ type: string; text?: string }> }> => {
+    const batch = await ctx.tools.execute({
+      signal: new AbortController().signal,
+      calls: [{ type: 'tool-call', id: ToolCallId(`c${String(++n)}`), name, arguments: JSON.stringify(args) }],
+    })
+    return batch.results[0]!.result as never
+  }
   return { ctx, call }
 }
 

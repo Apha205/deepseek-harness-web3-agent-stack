@@ -23,6 +23,7 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import Storage, { storageBackendServiceKey } from '@deepseek-ai/dsh-storage'
 import * as storageDomain from '@deepseek-ai/dsh-storage-domain'
 import TokenMeter from '@deepseek-ai/dsh-token-meter'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import ToolRuntime, { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import * as treasury from '../src/index.ts'
 import * as treasuryPolicy from '../src/policy.ts'
@@ -66,6 +67,7 @@ describe('tools/pre-execute gate (through the executor)', () => {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
+    await ctx.plugin(NativeToolExecutor)
     await mountTreasury(ctx, {
       ...options,
       policy: {
@@ -87,12 +89,13 @@ describe('tools/pre-execute gate (through the executor)', () => {
       }))
     }
     let calls = 0
-    const execute = (name: string) => ctx.tools.execute({
-      callId: ToolCallId(`call-${calls += 1}`),
-      name,
-      arguments: {},
-      signal: testSignal,
-    })
+    const execute = async (name: string) => {
+      const batch = await ctx.tools.execute({
+        calls: [{ type: 'tool-call', id: ToolCallId(`call-${calls += 1}`), name, arguments: '{}' }],
+        signal: testSignal,
+      })
+      return batch.results[0]!.result
+    }
     return { ctx, ran, execute }
   }
 
@@ -244,6 +247,7 @@ describe('agent/request gate (through the agent loop)', () => {
     await ctx.plugin(SessionStore)
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
+    await ctx.plugin(NativeToolExecutor)
     await ctx.plugin(AgentRegistry)
     await ctx.plugin(AgentLoop, { agents: [] })
     await mountTreasury(ctx, options)

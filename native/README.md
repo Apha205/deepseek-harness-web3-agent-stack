@@ -40,7 +40,7 @@ rides Base mainnet config for quotes (no factory deployed — advise only).
 # after pulling stack changes:
 # The CLI must match the stack's @deepseek-ai/dsh-* peers exactly: dsh
 # denies a bundle whose peers don't satisfy the running version.
-npm i -g @deepseek-ai/dsh@0.2.1-alpha.1
+npm i -g @deepseek-ai/dsh@0.2.2-rc.3
 pnpm install --frozen-lockfile && pnpm -r build
 # After a dsh version change, re-resolve the profile install so it carries no
 # packages from the previous version (same set as the Dockerfile; STACK is

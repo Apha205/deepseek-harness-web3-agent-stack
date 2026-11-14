@@ -20,6 +20,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import * as storageSynapse from '../src/index.ts'
 import { FilecoinBackend, isProviderSelectionError, normalizeRpcUrl, preview } from '../src/synapse.ts'
@@ -85,6 +86,7 @@ async function harness() {
   })
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
+  await ctx.plugin(NativeToolExecutor)
   await ctx.plugin(storageSynapse, {
     wallet: 'agent',
     rpcUrl: 'wss://api.calibration.node.glif.io/rpc/v1',
@@ -108,12 +110,13 @@ async function harness() {
     return new TextEncoder().encode(`bytes-for-${cid}`)
   })
   let calls = 0
-  const execute = (name: string, args: Record<string, unknown>) => ctx.tools.execute({
-    callId: ToolCallId(`call-${calls += 1}`),
-    name,
-    arguments: args,
-    signal: testSignal,
-  })
+  const execute = async (name: string, args: Record<string, unknown>) => {
+    const batch = await ctx.tools.execute({
+      calls: [{ type: 'tool-call', id: ToolCallId(`call-${calls += 1}`), name, arguments: JSON.stringify(args) }],
+      signal: testSignal,
+    })
+    return batch.results[0]!.result
+  }
   return { ctx, execute }
 }
 
@@ -231,6 +234,7 @@ describe('exactly-once: content ledger + pin read-back (real runtime path)', () 
     })
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
+    await ctx.plugin(NativeToolExecutor)
     await ctx.plugin(storageSynapse, {
       wallet: 'agent',
       rpcUrl: 'wss://api.calibration.node.glif.io/rpc/v1',

@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import {
   buildGateMetadataV3,
@@ -47,6 +48,7 @@ async function harness() {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
+  await ctx.plugin(NativeToolExecutor)
   // Stub wallet (spike stand-in): decrypt tests need an EOA address to reach
   // the signGate seam, where the unwired default throws AolSigningError.
   ;(ctx as any).provide('wallet', {
@@ -60,12 +62,13 @@ async function harness() {
     fetchRootKey: false,
   })
   let calls = 0
-  const execute = (name: string, args: Record<string, unknown>) => ctx.tools.execute({
-    callId: ToolCallId(`call-${calls += 1}`),
-    name,
-    arguments: args,
-    signal: testSignal,
-  })
+  const execute = async (name: string, args: Record<string, unknown>) => {
+    const batch = await ctx.tools.execute({
+      calls: [{ type: 'tool-call', id: ToolCallId(`call-${calls += 1}`), name, arguments: JSON.stringify(args) }],
+      signal: testSignal,
+    })
+    return batch.results[0]!.result
+  }
   return { ctx, execute }
 }
 

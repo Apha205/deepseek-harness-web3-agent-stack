@@ -12,6 +12,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { ToolDispatchExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import ToolRuntime, { defineTool } from '@deepseek-ai/dsh-tools'
 import * as GuardPlugin from '../src/index.ts'
 import { ExactlyOnceRuntime } from '../src/guard.ts'
@@ -54,19 +55,20 @@ async function mount(options: {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
+  await ctx.plugin(NativeToolExecutor)
   await ctx.plugin(GuardPlugin, {
     ...(options.writes !== undefined ? { writes: options.writes } : {}),
     ...(options.exempt !== undefined ? { exempt: options.exempt } : {}),
   })
   for (const tool of options.tools ?? []) ctx.tools.register(tool)
   let n = 0
-  const call = (name: string, args: unknown, callId?: string): Promise<ToolExecutionResult> =>
-    ctx.tools.execute({
+  const call = async (name: string, args: unknown, callId?: string): Promise<ToolExecutionResult> => {
+    const batch = await ctx.tools.execute({
       signal: new AbortController().signal,
-      callId: ToolCallId(callId ?? `c${String(++n)}`),
-      name,
-      arguments: args,
+      calls: [{ type: 'tool-call', id: ToolCallId(callId ?? `c${String(++n)}`), name, arguments: JSON.stringify(args) }],
     })
+    return batch.results[0]!.result
+  }
   return { ctx, call }
 }
 

@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { Context } from '@deepseek-ai/cordis'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import * as ProwlarrPlugin from '../src/index.ts'
 import { MAX_LINK_REFS, storeReleaseLinks, takeReleaseLinks } from '../src/links.ts'
@@ -83,9 +84,16 @@ async function mount(config: ProwlarrPlugin.Config = {}) {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
+  await ctx.plugin(NativeToolExecutor)
   await ctx.plugin(ProwlarrPlugin, { baseUrl, apiKey: KEY, ...config })
   let n = 0
-  const call = (name: string, args: unknown) => ctx.tools.execute({ signal: new AbortController().signal, callId: ToolCallId(`c${++n}`), name, arguments: args })
+  const call = async (name: string, args: unknown) => {
+    const batch = await ctx.tools.execute({
+      signal: new AbortController().signal,
+      calls: [{ type: 'tool-call', id: ToolCallId(`c${++n}`), name, arguments: JSON.stringify(args) }],
+    })
+    return batch.results[0]!.result
+  }
   return { ctx, call }
 }
 

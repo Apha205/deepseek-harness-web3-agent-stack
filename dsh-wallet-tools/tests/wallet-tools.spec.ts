@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import * as walletTools from '../src/index.ts'
 
@@ -21,6 +22,7 @@ async function harness() {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
+  await ctx.plugin(NativeToolExecutor)
   ctx.provide('wallet', {
     address: async () => ADDR,
     list: () => [{ name: 'agent', chain: 'evm', wallet: 'agent' }],
@@ -37,12 +39,13 @@ async function harness() {
   })
   await ctx.plugin(walletTools, { wallet: 'agent', liveBalances: false })
   let calls = 0
-  const execute = (name: string, args: Record<string, unknown>) => ctx.tools.execute({
-    callId: ToolCallId(`call-${calls += 1}`),
-    name,
-    arguments: args,
-    signal: testSignal,
-  })
+  const execute = async (name: string, args: Record<string, unknown>) => {
+    const batch = await ctx.tools.execute({
+      calls: [{ type: 'tool-call', id: ToolCallId(`call-${calls += 1}`), name, arguments: JSON.stringify(args) }],
+      signal: testSignal,
+    })
+    return batch.results[0]!.result
+  }
   return { execute }
 }
 

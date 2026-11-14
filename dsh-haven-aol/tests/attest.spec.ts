@@ -18,6 +18,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import * as havenAol from '../src/index.ts'
 import { AolRuntime, internals, resetAttestDedup } from '../src/aol.ts'
@@ -39,6 +40,7 @@ async function harness(wallet: Record<string, unknown>) {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
+  await ctx.plugin(NativeToolExecutor)
   ;(ctx as any).provide('wallet', wallet)
   await ctx.plugin(havenAol, {
     wallet: 'agent',
@@ -47,12 +49,13 @@ async function harness(wallet: Record<string, unknown>) {
     fetchRootKey: false,
   })
   let calls = 0
-  const execute = (name: string, args: Record<string, unknown>) => ctx.tools.execute({
-    callId: ToolCallId(`call-${calls += 1}`),
-    name,
-    arguments: args,
-    signal: testSignal,
-  })
+  const execute = async (name: string, args: Record<string, unknown>) => {
+    const batch = await ctx.tools.execute({
+      calls: [{ type: 'tool-call', id: ToolCallId(`call-${calls += 1}`), name, arguments: JSON.stringify(args) }],
+      signal: testSignal,
+    })
+    return batch.results[0]!.result
+  }
   return { ctx, execute }
 }
 

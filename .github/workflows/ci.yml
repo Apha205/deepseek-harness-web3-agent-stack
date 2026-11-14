@@ -41,6 +41,12 @@ jobs:
           npm --prefix ../mint-glue-graduate/sdk ci --no-audit --no-fund --ignore-scripts
           npm --prefix ../mint-glue-graduate/sdk run build
 
+      # dsh 0.2.2 requires Node >= 24.9 (package engines); the runner default
+      # is older, so pin the toolcache explicitly.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
       - name: Enable pnpm via corepack
         run: |
           set -euo pipefail

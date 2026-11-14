@@ -6,6 +6,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import * as erc8004 from '../src/index.ts'
 import { buildDefaultCard, Erc8004Backend } from '../src/erc8004.ts'
@@ -20,6 +21,7 @@ async function harness() {
   })
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
+  await ctx.plugin(NativeToolExecutor)
   // Provide a mock synapse for Filecoin Pin (pdp proofs) — the package now delegates to ctx.synapse
   const mockSynapse: any = {
     store: vi.fn(async (data: Uint8Array) => ({ cid: 'bafybeihhal5hlbylkibniig6j72wdrm7lr4nf6z47natleh2jkyosrg7di', pieceCid: 'bafkpiece123' })),
@@ -67,12 +69,13 @@ async function harness() {
   rt.tokenURI = vi.fn(async () => 'ipfs://bafybeihhal5hlbylkibniig6j72wdrm7lr4nf6z47natleh2jkyosrg7di/agent-card.json')
   rt.ownerOf = vi.fn(async () => await ctx.wallet.address('agent'))
   let calls = 0
-  const execute = (name: string, args: Record<string, unknown>) => ctx.tools.execute({
-    callId: ToolCallId(`call-${++calls}`),
-    name,
-    arguments: args,
-    signal: new AbortController().signal,
-  })
+  const execute = async (name: string, args: Record<string, unknown>) => {
+    const batch = await ctx.tools.execute({
+      calls: [{ type: 'tool-call', id: ToolCallId(`call-${++calls}`), name, arguments: JSON.stringify(args) }],
+      signal: new AbortController().signal,
+    })
+    return batch.results[0]!.result
+  }
   return { ctx, execute, rt, mockSynapse }
 }
 
@@ -251,6 +254,7 @@ describe('exactly-once: timeout-after-broadcast + read-back (real register path)
     })
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
+    await ctx.plugin(NativeToolExecutor)
     const mockSynapse: any = {
       store: vi.fn(async (data: Uint8Array) => ({ cid: CID, pieceCid: 'bafkpiece123' })),
     }
