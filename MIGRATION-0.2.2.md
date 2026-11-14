@@ -41,15 +41,32 @@ Upstream APIs are pre-stable; every consumer was re-verified against that tree.
   unchanged: `tools/pre-execute|execute|post-execute|result`,
   `agent/request`, `agent/pre-step`, canonical `output.schema` + `render`.
 
-## Deliberately retained
+## exactly-once: snapshotEvents → session projection
 
-- `dsh-exactly-once/src/guard.ts` still calls the deprecated
-  `Session.snapshotEvents()` for cold-session repeat evidence. Upstream marks
-  the reader deprecated for *new* calls but keeps it for existing logic
-  (its own session-controller still uses it); the guard's `SessionLike`
-  seam is structural, so no signature change was needed. Migrate to
-  `ctx.sessionQuery` projections when upstream removes the reader.
-- Test-side `session.snapshotEvents()` assertions likewise remain.
+`dsh-exactly-once` no longer calls the deprecated `Session.snapshotEvents()`.
+Repeat evidence is now the `exactlyOnce` host-only session projection
+(`src/projection.ts`): an incremental `apply` fold over `tool/call` +
+`tool/result` events, registered through `ctx.sessionProjections` (a new
+required inject; `dsh-base` mounts the registry in every agent profile) and
+read via `handle.stateOf(session)`. This also fixes two latent defects in
+the old fold:
+
+- **Argument-identity mismatch.** `tool/call` persists the model's raw JSON
+  *string* while `exec.arguments` is parsed; the old fold canonicalized the
+  string, so cold evidence could never match a warm identity. The projection
+  parses arguments exactly as dispatch does (`JSON.parse`, `{}` on empty,
+  raw string on failure).
+- **Interjection reset.** `resetAgent` cleared only the in-memory map; cold
+  evidence survived user interjections. The fold now clears `last` on
+  `user/message` events whose source kind is `user` (compaction checkpoints
+  and injected context carry other kinds and do not reset).
+
+State is bounded by distinct guarded-write identities (`calls` drains on
+each `tool/result`), is plain JSON, and is checkpointed by
+`dsh-session-projection-cache` where mounted, so cold reads resume from the
+watermark instead of refolding history. Test-side `session.snapshotEvents()`
+assertions in `dsh-channel-xmtp`/`dsh-treasury` specs remain — they are test
+utilities, not production callers.
 
 ## Deployment
 

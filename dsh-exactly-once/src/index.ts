@@ -7,8 +7,8 @@
  * Write calls (the `writes` patterns) are deduped by `(agent, callId)`,
  * in-process repeats replay the recorded result, and exact repeats
  * after ambiguous outcomes consult per-tool read-back hooks registered
- * through `ctx.exactlyOnce.registerCheck` (with cold repeat evidence
- * folded from the session ledger). Everything else passes through with
+ * through `ctx.exactlyOnce.registerCheck` (with cold repeat evidence read
+ * from the `exactlyOnce` session projection). Everything else passes through with
  * zero tracking.
  *
  * @module dsh-exactly-once
@@ -19,7 +19,10 @@ import z from '@deepseek-ai/schemastery'
 // Type-only: carries the `agent/pre-step` event declaration (the repeat
 // reset below) without a runtime dependency on the agent loop.
 import type {} from '@deepseek-ai/dsh-agent'
+// Type-only: resolves the required ctx.sessionProjections service declaration.
+import type {} from '@deepseek-ai/dsh-session-projection'
 import { ExactlyOnceRuntime } from './guard.ts'
+import { repeatEvidenceDefinition } from './projection.ts'
 
 export { ExactlyOnceRuntime } from './guard.ts'
 export type { GuardOptions } from './guard.ts'
@@ -34,8 +37,8 @@ declare module '@deepseek-ai/cordis' {
 
 /** Cordis plugin name. */
 export const name = 'exactly-once'
-/** The tool registry this plugin wraps. Agent sessions arrive on executions. */
-export const inject = ['tools']
+/** The tool registry this plugin wraps, plus the projection registry its cold evidence folds through. */
+export const inject = ['tools', 'sessionProjections']
 
 /**
  * Stack write tools guarded by default. `*_submit` covers the
@@ -96,13 +99,18 @@ export function resolveConfig(config: Config): ResolvedConfig {
 }
 
 /**
- * Provide `ctx.exactlyOnce` and wrap `tools/execute`.
- * @param ctx - plugin context carrying `ctx.tools`.
+ * Provide `ctx.exactlyOnce`, register the repeat-evidence projection, and
+ * wrap `tools/execute`.
+ * @param ctx - plugin context carrying `ctx.tools` and `ctx.sessionProjections`.
  * @param config - validated configuration.
  */
-export function apply(ctx: Context, config: Config): void {
+export async function apply(ctx: Context, config: Config): Promise<void> {
   const resolved = resolveConfig(config)
   const runtime = new ExactlyOnceRuntime({ writes: resolved.writes, exempt: resolved.exempt })
+  const handle = await ctx.sessionProjections.register(
+    repeatEvidenceDefinition(name => runtime.isWrite(name)),
+  )
+  runtime.attachRepeatEvidence(session => handle.stateOf(session).last)
   ctx.provide('exactlyOnce', runtime)
   ctx.on('tools/execute', (exec, next) => runtime.wrap(exec, next))
   ctx.on('agent/pre-step', ({ agent, messages }, next) => {

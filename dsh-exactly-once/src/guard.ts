@@ -15,8 +15,9 @@
  *    re-dispatches a settled callId after restart (repair closes
  *    dangling calls with synthetic `TOOL_OUTCOME_UNKNOWN` /
  *    `TOOL_NOT_STARTED` errors instead). What survives a restart is the
- *    repeat question, answered by folding `tool/call` + `tool/result`
- *    pairs into last-outcome evidence per (agent, tool, arguments).
+ *    repeat question, answered by the `exactlyOnce` session projection:
+ *    last-outcome evidence per (tool, canonical arguments) folded
+ *    incrementally from `tool/call` + `tool/result` events.
  * 3. **Repeat-after-ambiguous checks.** An exact `(agent, tool,
  *    canonical-args)` repeat following a non-success consults that
  *    tool's read-back hook when one is registered
@@ -32,8 +33,10 @@
  */
 
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import type { Session } from '@deepseek-ai/dsh-session'
 import type { ToolDispatchExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import { canonicalize } from './canonical.ts'
+import type { OutcomeRecord } from './projection.ts'
 import type { CheckCommittedFn, LastOutcome } from './types.ts'
 
 /**
@@ -44,12 +47,6 @@ import type { CheckCommittedFn, LastOutcome } from './types.ts'
  * are never stamped.
  */
 const AMBIGUOUS_CODES = new Set(['TOOL_TIMEOUT', 'ABORTED', 'ABORTED_BEFORE_DISPATCH'])
-
-/** Least session surface the cold path needs (structural: no session dep). */
-interface SessionLike {
-  readonly seq?: number
-  snapshotEvents(): readonly unknown[]
-}
 
 /** Options for {@link ExactlyOnceRuntime}. */
 export interface GuardOptions {
@@ -70,10 +67,8 @@ interface OutcomeEntry extends LastOutcome {
   readonly name: string
 }
 
-interface ColdIndex {
-  readonly seq: number | undefined
-  readonly lastByIdentity: ReadonlyMap<string, LastOutcome>
-}
+/** Reads one session's projected last-outcome records (`name|argsKey` → outcome). */
+export type RepeatEvidenceReader = (session: Session) => Readonly<Record<string, OutcomeRecord>>
 
 /** Lossless clone through JSON (results are lossless-JSON by contract). */
 function cloneJson<T>(value: T): T {
@@ -90,7 +85,7 @@ export class ExactlyOnceRuntime {
   private readonly settled = new Map<string, SettledEntry>()
   private readonly outcomes = new Map<string, OutcomeEntry>()
   private readonly agentIds = new WeakMap<object, string>()
-  private readonly cold = new WeakMap<object, ColdIndex>()
+  private repeatEvidence: RepeatEvidenceReader | undefined
   private agentSeq = 0
   private attempts = 0
 
@@ -149,9 +144,8 @@ export class ExactlyOnceRuntime {
     if (inflight !== undefined) return inflight
     const prior = this.settled.get(key)
     if (prior !== undefined) return cloneJson(prior.result)
-    const cold = this.scanSession(exec)
     const identity = this.identityKey(exec)
-    const last = this.outcomes.get(identity) ?? cold?.lastByIdentity.get(identity)
+    const last = this.outcomes.get(identity) ?? this.coldLast(exec)
     if (last !== undefined && last.isError) {
       const hook = this.checks.get(exec.name)
       if (hook !== undefined) {
@@ -245,63 +239,27 @@ export class ExactlyOnceRuntime {
   }
 
   /**
-   * Rebuild the cold index from one agent's session events, memoized by
-   * session seq so the steady state costs one WeakMap lookup. Sessions
-   * without a seq (never in production) rescan every call.
+   * Attach the session-projection repeat-evidence reader. The plugin calls
+   * this after `sessionProjections.register` resolves; until then (and for
+   * agentless executions) cold evidence is simply absent and repeats
+   * dispatch — liveness wins, same as a session with no history.
+   * @param read - `(session) => last-outcome records` from the projection.
    */
-  private scanSession(exec: ToolDispatchExecution): ColdIndex | undefined {
-    const holder = exec.agent as unknown as { session?: unknown } | undefined
-    const session = holder?.session as SessionLike | undefined
-    if (session === null || session === undefined || typeof session.snapshotEvents !== 'function') return undefined
-    const sessionObj = session as unknown as object
-    const seq = typeof session.seq === 'number' ? session.seq : undefined
-    const cached = this.cold.get(sessionObj)
-    if (cached !== undefined && seq !== undefined && cached.seq === seq) return cached
-    const index: ColdIndex = { ...buildColdIndex(session.snapshotEvents(), this.agentPart(exec.agent)), seq }
-    this.cold.set(sessionObj, index)
-    return index
+  attachRepeatEvidence(read: RepeatEvidenceReader): void {
+    this.repeatEvidence = read
   }
-}
 
-/**
- * Fold `tool/call` + `tool/result` events into last-outcome evidence per
- * retry identity. Result identity reads `toolCallId` (falling back to
- * `source.callId`, the repair-closer path) — the loop never stores a bare
- * `message.callId`.
- */
-function buildColdIndex(events: readonly unknown[], agentPart: string): Omit<ColdIndex, 'seq'> {
-  const calls = new Map<string, { name: string; argsKey: string }>()
-  const lastByIdentity = new Map<string, LastOutcome>()
-  for (const event of events) {
-    if (event === null || typeof event !== 'object') continue
-    const record = event as { type?: unknown; data?: unknown }
-    if (record.data === null || typeof record.data !== 'object') continue
-    const data = record.data as Record<string, unknown>
-    if (record.type === 'tool/call') {
-      if (typeof data['callId'] === 'string' && typeof data['name'] === 'string') {
-        calls.set(data['callId'], { name: data['name'], argsKey: canonicalize(data['arguments']) })
-      }
-    } else if (record.type === 'tool/result') {
-      const message = data['message']
-      if (message === null || typeof message !== 'object') continue
-      const result = message as Record<string, unknown>
-      const source = result['source']
-      const sourceCallId = source !== null && typeof source === 'object'
-        ? (source as Record<string, unknown>)['callId']
-        : undefined
-      const callId = typeof result['toolCallId'] === 'string'
-        ? result['toolCallId']
-        : typeof sourceCallId === 'string' ? sourceCallId : undefined
-      if (callId === undefined) continue
-      const call = calls.get(callId)
-      if (call === undefined) continue
-      const info = data['error'] as { code?: unknown } | null
-      lastByIdentity.set(`${agentPart}|${call.name}|${call.argsKey}`, {
-        isError: result['isError'] === true,
-        code: typeof info?.code === 'string' ? info.code : undefined,
-        at: 0,
-      })
-    }
+  /**
+   * Last outcome for this call's retry identity from the session
+   * projection: per-session state keyed `name|canonicalArgs`, so it
+   * survives restarts and checkpoint restores without rescanning the log.
+   */
+  private coldLast(exec: ToolDispatchExecution): LastOutcome | undefined {
+    const read = this.repeatEvidence
+    const session = exec.agent?.session
+    if (read === undefined || session === undefined) return undefined
+    const record = read(session)[`${exec.name}|${canonicalize(exec.arguments)}`]
+    if (record === undefined) return undefined
+    return { isError: record.isError, code: record.code ?? undefined, at: record.at }
   }
-  return { lastByIdentity }
 }

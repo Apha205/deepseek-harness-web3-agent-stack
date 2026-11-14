@@ -12,8 +12,11 @@ cooperation and adds no tools or parameters:
 - **Session-ledger repeat evidence.** Canonical values are deliberately
   omitted from durable events and the harness never re-dispatches a
   settled callId after restart (repair closes dangling calls with
-  synthetic errors), so the cold path folds `tool/call` + `tool/result`
-  pairs into last-outcome evidence instead of replaying successes.
+  synthetic errors), so the cold path reads last-outcome evidence from
+  the `exactlyOnce` session projection — an incremental fold of
+  `tool/call` + `tool/result` events, checkpointed with the session —
+  instead of replaying successes. A human `user/message` clears the
+  evidence inside the fold, matching the `agent/pre-step` reset.
 - **Repeat-after-ambiguous checks.** An exact repeat (same agent, tool,
   canonical arguments) following a non-success consults that tool's
   read-back hook when one is registered through
@@ -30,8 +33,10 @@ Reads and unlisted tools pass through with zero tracking.
 dsh plugin --profile <name> add /path/to/dsh-exactly-once
 ```
 
-`inject = ['tools']` only. The `agent/pre-step` repeat reset rides the
-context event without a service dependency.
+`inject = ['tools', 'sessionProjections']` — the projection registry is
+required (present in any agent profile via `dsh-base`). The
+`agent/pre-step` repeat reset rides the context event without a service
+dependency.
 
 ## Config
 
@@ -50,8 +55,8 @@ pnpm vitest run dsh-exactly-once/tests/guard.spec.ts
 ```
 
 Redelivery, replay, transparency, and hook verdicts run through the real
-executor; cold-session paths run the wrapper directly against fabricated
-session events.
+executor; cold-session paths run the wrapper against real sessions whose
+`tool/call`/`tool/result`/`user/message` events drive the projection.
 
 ## Known Limitations and Deferred Work
 
