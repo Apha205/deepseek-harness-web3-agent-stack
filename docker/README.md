@@ -97,7 +97,7 @@ consecutive self-wakes at 3 per conversation (`maxConsecutiveWakes` in
 
 ## Testnet defaults
 
-Sepolia, Base Sepolia, Filecoin calibration, Arkiv Tiramisu. Royalty
+Sepolia, Base Sepolia, Filecoin calibration, Arkiv Rabdi. Royalty
 launches have no testnet factory configured (quote/advise work; launches
 fail safe). XMTP runs on `production` (messaging, needed by the Convos
 app); the Haven-AOL canister stays mainnet (ICP has no public testnet,

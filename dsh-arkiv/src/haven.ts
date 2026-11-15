@@ -1,11 +1,11 @@
 /**
- * Haven application-protocol enforcement for Arkiv entities (ARKIV_FORMAT v2.2.0).
+ * Haven application-protocol enforcement for Arkiv entities (ARKIV_FORMAT v2.3.0).
  *
  * This harness is Haven-specific: every entity written through
  * `arkiv_create_entity` / `arkiv_update_entity` must conform to the Haven
  * data format, and the runtime rejects anything else BEFORE signing.
  * Reference: `services/arkiv_sync.py`
- * (`_build_attributes`, `_build_payload`, Tiramisu cell limits) — the
+ * (`_build_attributes`, `_build_payload`, Arkiv cell limits) — the
  * tables below are a TypeScript port of its wire rules, made fail-closed:
  * where the reference implementation derives attributes from its pipeline
  * context (consistent
@@ -23,14 +23,16 @@
  *   tagged `u256` cell, because real ERC-20 thresholds (1e18 and beyond)
  *   do not fit i32 — an i32 threshold made every genuine gate unwritable.
  *   Readers already parse u64/u256 cells; nothing filters on threshold.
- * - Drip series / parts: the spec's tagged JS-SDK wire (`addr`, `bytes32`,
- *   `key`, `i32`, `str`), matching the dapp publisher — notably
- *   `series_ref` as `key`, which the one-query fan-out depends on.
+ * - Drip series / parts: the spec's wire values, matching the dapp
+ *   publisher — notably `series_ref` as the series entity key hex
+ *   (`0x` + 64 hex in a `str` cell), which the one-query fan-out depends
+ *   on. Writes carry bare values;
+ *   the per-group schema (./schemas.ts) declares the column types.
  *
  * @module dsh-arkiv/haven
  */
 
-import { addr, bytes32, i32, key, str, u256, U256_MAX } from '@arkiv-network/sdk/attr';
+import { addr, key, u64, u256, U256_MAX } from '@arkiv-network/sdk/schema';
 import { CID } from 'multiformats/cid';
 import { tryFrom as tryPieceFrom } from '@filoz/synapse-core/piece';
 
@@ -98,7 +100,7 @@ export const MIME_TO_ENUM: Readonly<Record<string, number>> = {
 /** Highest assigned MIME enum code (`0` = unknown). */
 export const MIME_ENUM_MAX = 14;
 
-/** Chain cell limits (reference Tiramisu dialect: engine caps, backstop only). */
+/** Chain cell limits (reference Arkiv dialect: engine caps, backstop only). */
 export const HAVEN_MAX_ATTRIBUTES = 32;
 export const HAVEN_MAX_PAYLOAD_BYTES = 128 * 1024;
 
@@ -152,7 +154,7 @@ export const HAVEN_DROPPED_PAYLOAD_KEYS: ReadonlySet<string> = new Set([
   'expires_at_block', 'created_at_block', 'has_ai_data', 'description',
 ]);
 
-/** `Ident32` name grammar (reference `_TIRAMISU_NAME_RE`). */
+/** `Ident32` name grammar (reference `_ARKIV_NAME_RE`). */
 const ATTR_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9._-]*$/;
 
 /** Query-language words the engine rejects as attribute names. */
@@ -175,7 +177,7 @@ export interface HavenNormalizedWrite {
   grpClass: HavenGroupClass;
   /** The `grp` value (known group or custom override). */
   grp: string;
-  /** Attributes exactly as they will be written (reference `str|int` wire for full/generic, tagged SDK values for drips). */
+  /** Attributes exactly as they will be written (bare values — the SDK 1.x schema columns coerce them; query filters are tagged separately in normalizeHavenWhere). */
   attributes: Record<string, unknown>;
   /** Payload bytes, unchanged. */
   payload: Uint8Array;
@@ -385,8 +387,8 @@ function defaultExpiresIn(grpClass: HavenGroupClass): number {
  * Validate one Haven entity write and normalize it to its wire encoding.
  * Fail-closed: any deviation from ARKIV_FORMAT v2.2.0 throws before anything
  * is signed. Normalization is what makes retries identical: hex lowercased,
- * `0x` stripped where the reference wire is bare, drip facts wrapped in their
- * spec-tagged SDK values.
+ * `0x` stripped where the reference wire is bare, drip facts kept as bare
+ * values for the SDK 1.x schema columns (./schemas.ts).
  */
 export function validateHavenWrite(input: {
   payload: Uint8Array;
@@ -594,7 +596,7 @@ function finishFull(args: {
     if (threshold !== gateThresholdValue('payload gate', gate.threshold)) {
       fail(`gate_threshold (${threshold}) != gate.threshold (${JSON.stringify(gate.threshold)})`);
     }
-    normalized.gate_threshold = u256(threshold);
+    normalized.gate_threshold = threshold;
     if (gateType === 3) {
       if (attributes.gate_epoch === undefined) fail('gate_epoch is required for v3 (epoch corpus grouping)');
       const attrEpoch = requireNonNegativeI32('gate_epoch', attributes.gate_epoch);
@@ -687,15 +689,16 @@ function finishSeries(args: {
   if (chainId <= 0) fail(`gate_chain must be a positive EIP-155 id, got ${chainId}`);
 
   // Drip wire is spec-tagged (dapp publisher): addr / i32 / str.
+  // SDK 1.x schema columns accept bare values — the schema coerces them.
   const normalized: Record<string, unknown> = {
-    grp: str(grp),
-    title: str(requireStr128('title', attributes.title)),
-    gate_type: i32(gateType),
-    gate_token: addr(requireTokenAddress('gate_token', attributes.gate_token)),
-    gate_chain: i32(chainId),
-    gate_threshold: u256(requireThreshold('gate_threshold', attributes.gate_threshold)),
-    drip_id: str(requireStr128('drip_id', attributes.drip_id)),
-    drip_total: i32(dripTotal),
+    grp,
+    title: requireStr128('title', attributes.title),
+    gate_type: gateType,
+    gate_token: requireTokenAddress('gate_token', attributes.gate_token),
+    gate_chain: chainId,
+    gate_threshold: requireThreshold('gate_threshold', attributes.gate_threshold),
+    drip_id: requireStr128('drip_id', attributes.drip_id),
+    drip_total: dripTotal,
   };
   return {
     grpClass: 'series',
@@ -739,13 +742,13 @@ function finishPart(args: {
   if (gateType !== 4) fail(`gate_type must be 4 for ${grp}, got ${gateType}`);
 
   const normalized: Record<string, unknown> = {
-    grp: str(grp),
-    gate_type: i32(gateType),
-    drip_id: str(requireStr128('drip_id', attributes.drip_id)),
-    drip_idx: i32(requireNonNegativeI32('drip_idx', attributes.drip_idx)),
-    series_ref: key(requireEntityKey('series_ref', attributes.series_ref) as `0x${string}`),
-    mcap_usd: i32(requireNonNegativeI32('mcap_usd', attributes.mcap_usd)),
-    sha256_ct: bytes32(`0x${requireSha256Ct('sha256_ct', attributes.sha256_ct)}` as `0x${string}`),
+    grp,
+    gate_type: gateType,
+    drip_id: requireStr128('drip_id', attributes.drip_id),
+    drip_idx: requireNonNegativeI32('drip_idx', attributes.drip_idx),
+    series_ref: requireEntityKey('series_ref', attributes.series_ref),
+    mcap_usd: requireNonNegativeI32('mcap_usd', attributes.mcap_usd),
+    sha256_ct: requireSha256Ct('sha256_ct', attributes.sha256_ct),
   };
   return {
     grpClass: 'part',
@@ -760,8 +763,10 @@ function finishPart(args: {
 /**
  * Normalize a query filter to the wire types it will be compared against.
  * Reads stay lenient (old rows may carry deleted keys), but known keys are
- * normalized so lookups hit: hex lowercased, `series_ref` wrapped as `key`,
- * drip-part `sha256_ct` wrapped as `bytes32`. Numeric facts passed as
+ * normalized so lookups hit: hex lowercased to the bare `str` spellings every
+ * Haven writer stores (`sha256_ct` as 64 hex, `series_ref` as `0x` + 64 hex).
+ * `gate_threshold` stays tagged `u256` — its cells are u256, and a bare
+ * number would predicate as i32 and silently miss. Numeric facts passed as
  * strings are rejected — a `str` filter never matches an `i32` cell, so a
  * silent miss is worse than an error.
  */
@@ -769,11 +774,20 @@ export function normalizeHavenWhere(where: Record<string, unknown> | undefined):
   if (where === undefined) return {};
   if (!isRecord(where)) fail('query filter must be an object');
   const normalized: Record<string, unknown> = {};
-  const grp = where.grp;
-  const dripPartScope = grp === HAVEN_GROUPS.dripPart;
   for (const [name, value] of Object.entries(where)) {
     if (QUERY_SYSTEM_ATTRS.has(name)) {
-      normalized[name] = value;
+      // System attributes carry fixed types — a bare string predicates as
+      // `str` and silently misses ($key is `key`, $owner/$creator `addr`,
+      // $expiresAt `u64`).
+      if (name === '$key' && typeof value === 'string') {
+        normalized[name] = key(value as `0x${string}`);
+      } else if ((name === '$owner' || name === '$creator') && typeof value === 'string') {
+        normalized[name] = addr(value as `0x${string}`);
+      } else if (name === '$expiresAt') {
+        normalized[name] = u64(typeof value === 'bigint' ? value : BigInt(value as number | string));
+      } else {
+        normalized[name] = value;
+      }
       continue;
     }
     validateAttrName(name);
@@ -787,16 +801,17 @@ export function normalizeHavenWhere(where: Record<string, unknown> | undefined):
         normalized[name] = typeof value === 'string' && HEX40.test(value) ? value.toLowerCase() : value;
         break;
       case 'sha256_ct':
+        // str cell on every Haven surface — bare lowercase 64-hex, `0x` stripped.
         if (typeof value === 'string' && HEX64.test(value)) {
-          const bare = value.toLowerCase().replace(/^0x/, '');
-          normalized[name] = dripPartScope ? bytes32(`0x${bare}`) : bare;
+          normalized[name] = value.toLowerCase().replace(/^0x/, '');
         } else {
           normalized[name] = value;
         }
         break;
       case 'series_ref':
+        // str cell holding the series entity key — `0x` + 64 hex, lowercase.
         normalized[name] = typeof value === 'string' && HEX64.test(value)
-          ? key((value.toLowerCase().startsWith('0x') ? value.toLowerCase() : `0x${value.toLowerCase()}`) as `0x${string}`)
+          ? (value.toLowerCase().startsWith('0x') ? value.toLowerCase() : `0x${value.toLowerCase()}`)
           : value;
         break;
       case 'gate_threshold':

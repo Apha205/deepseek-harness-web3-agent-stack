@@ -1,6 +1,6 @@
 /**
  * Arkiv entity storage for DSH — ctx.arkiv + arkiv_create_entity / arkiv_query tools.
- * Filecoin Onchain Cloud is Synapse; Arkiv is the entity chain (Tiramisu testnet).
+ * Filecoin Onchain Cloud is Synapse; Arkiv is the entity chain (Rabdi testnet).
  * This ports the reference services/arkiv_sync.py (ArkivSyncConfig, create_entity) to DSH's
  * isolated-bundles-coupled-at-seams model: TypeScript/Node v22/Cordis, gated credentials.
  *
@@ -104,9 +104,10 @@ function updateKeyFor(params: { key: `0x${string}`; payload: Uint8Array; content
   return `update:${hash.digest('hex')}`;
 }
 
-/** Best-effort payload bytes out of an entity query hit (SDK shape varies). */
-function queryPayloadBytes(entity: { payload?: unknown }): Uint8Array | undefined {
-  const payload = entity.payload;
+/** Best-effort payload bytes out of an entity query hit (SDK 1.x flat row shape). */
+function queryPayloadBytes(entity: { payload?: unknown; $attributes?: Record<string, { type: string; value: unknown }> }): Uint8Array | undefined {
+  // SDK 1.x: `payload` is a `bytes` column — selected as a flat field or inside `$attributes`.
+  const payload = entity.payload ?? entity.$attributes?.payload?.value;
   if (payload instanceof Uint8Array) return payload;
   if (typeof payload === 'string' && payload.startsWith('0x')) {
     try {
@@ -283,8 +284,10 @@ export class ArkivRuntime {
       const bytes = queryPayloadBytes(entity);
       if (bytes === undefined) continue;
       if (createHash('sha256').update(bytes).digest('hex') !== want) continue;
-      if (entity.contentType !== undefined && entity.contentType !== record.contentType) continue;
-      return { key: entity.key, owner: entity.owner };
+      const ct = entity.content_type ?? entity.contentType;
+      if (ct !== undefined && ct !== record.contentType) continue;
+      const key = (entity.$key ?? entity.key) as `0x${string}` | undefined;
+      if (key) return { key, owner: (entity.$owner ?? entity.owner ?? '0x') as `0x${string}` };
     }
     return undefined;
   }
@@ -420,7 +423,8 @@ export class ArkivRuntime {
 
   private async doCreate(params: { payload: Uint8Array; contentType: string; attributes?: Record<string, unknown>; expiresIn?: number }): Promise<ArkivEntityRecord> {
     const be = await this.ensureBackend();
-    const { key, txHash } = await be.createEntity(params);
+    const grp = typeof params.attributes?.grp === 'string' ? params.attributes.grp : undefined;
+    const { key, txHash } = await be.createEntity({ ...params, grp });
     const record: ArkivEntityRecord = { key, owner: '0x' as any, payload: params.payload, contentType: params.contentType, attributes: params.attributes, txHash };
     this.emitCreated(record);
     return record;
@@ -463,7 +467,11 @@ export class ArkivRuntime {
 
   private async doBatch(writes: Array<{ payload: Uint8Array; contentType: string; attributes: Record<string, unknown>; expiresIn: number }>): Promise<Array<{ key: `0x${string}`; txHash: `0x${string}` }>> {
     const be = await this.ensureBackend();
-    const results = await be.createEntities(writes);
+    const records = writes.map(write => ({
+      ...write,
+      grp: typeof write.attributes?.grp === 'string' ? write.attributes.grp : undefined,
+    }));
+    const results = await be.createEntities(records);
     // One event per minted record (same shape as the single path, in order).
     for (const [index, write] of writes.entries()) {
       const hit = results[index] as { key: `0x${string}`; txHash: `0x${string}` };
@@ -497,14 +505,49 @@ export class ArkivRuntime {
 
   private async doUpdate(params: { key: `0x${string}`; payload: Uint8Array; contentType: string; attributes?: Record<string, unknown>; expiresIn?: number }): Promise<{ txHash: `0x${string}` }> {
     const be = await this.ensureBackend();
-    return be.updateEntity(params);
+    const grp = typeof params.attributes?.grp === 'string' ? params.attributes.grp : undefined;
+    return be.updateEntity({ ...params, grp });
   }
 
   async queryEntities(query: { where?: Record<string, unknown>; limit?: number }): Promise<ArkivEntityRecord[]> {
     const be = await this.ensureBackend();
     const where = normalizeHavenWhere(query.where);
     const entities = await be.queryEntities({ where, limit: query.limit });
-    return entities as ArkivEntityRecord[];
+    return entities.map(row => {
+      const r = row as Record<string, unknown>;
+      // SDK 1.x returns flat rows: system fields are `$`-prefixed and schema
+      // columns (payload, content_type, …) come back as tagged ArkivValue
+      // objects `{type, value}`; `$attributes` is a name → ArkivValue map.
+      const unwrap = (v: unknown): unknown =>
+        (v !== null && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Uint8Array)
+          && 'type' in v && 'value' in v)
+          ? (v as { value: unknown }).value
+          : v;
+      const attrs = r.$attributes as Record<string, unknown> | undefined;
+      const payload = unwrap(r.payload ?? attrs?.payload);
+      const contentType = unwrap(r.content_type ?? attrs?.content_type ?? r.contentType);
+      const record: ArkivEntityRecord = {
+        key: (r.$key ?? r.key) as `0x${string}`,
+        owner: (r.$owner ?? r.owner ?? '0x') as `0x${string}`,
+      };
+      if (payload instanceof Uint8Array) record.payload = payload;
+      else if (typeof payload === 'string' && payload.startsWith('0x')) {
+        try {
+          const body = payload.slice(2);
+          const bytes = new Uint8Array(body.length / 2);
+          for (let i = 0; i < bytes.length; i += 1) bytes[i] = Number.parseInt(body.slice(i * 2, i * 2 + 2), 16);
+          record.payload = bytes;
+        } catch { /* leave undefined */ }
+      }
+      if (typeof contentType === 'string') record.contentType = contentType;
+      if (attrs) {
+        record.attributes = Object.fromEntries(
+          Object.entries(attrs).map(([k, v]) => [k, unwrap(v)]),
+        );
+      }
+      if (r.$expiresAt !== undefined) record.expiresAt = r.$expiresAt as bigint;
+      return record;
+    });
   }
 }
 

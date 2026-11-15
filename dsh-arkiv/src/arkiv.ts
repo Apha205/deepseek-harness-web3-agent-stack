@@ -6,12 +6,21 @@
 
 import type { Hex } from 'viem';
 import type { CreateEntityReturnType, ExecuteBatchReturnType } from '@arkiv-network/sdk';
+import type { Schema } from '@arkiv-network/sdk/schema';
+import { schemaForGrp } from './schemas.ts';
+import { HAVEN_BTL_FULL_S, HAVEN_BTL_PART_S, HAVEN_BTL_SERIES_S } from './haven.ts';
 
 export interface ArkivBackendOpts {
   privateKeyRef: string;
   getPrivateKey: () => Promise<string>;
   rpcUrl: string;
   chainId?: number;
+  /**
+   * Optional fixed schema for every write. Unset: `schemaForGrp` picks the
+   * Haven media schema from the record's `grp`. dsh-board passes its
+   * BOARD_SCHEMA here — board attributes are not HavenFullSchema columns.
+   */
+  schema?: Schema;
 }
 
 /**
@@ -22,7 +31,7 @@ export interface ArkivBackendOpts {
  * field, both this signature and the mapper below break loudly.
  */
 export interface ArkivCreateClient {
-  createEntity: (data: any) => Promise<CreateEntityReturnType>;
+  createEntity: (schema: Schema, values: Record<string, unknown>, options: { expiration: unknown }) => Promise<CreateEntityReturnType>;
 }
 
 /**
@@ -30,8 +39,8 @@ export interface ArkivCreateClient {
  * the SDK silently ignores an `attributes` key on patch (create is the
  * only call that takes one), so passing `attributes` looks green while
  * every attribute goes stale — live incident, three no-op rewrites.
- * Values arrive pre-tagged (str/i32/u256/addr) from validateHavenWrite
- * and pass through untouched.
+ * Values arrive bare from validateHavenWrite (the schema columns coerce
+ * them) and pass through untouched.
  */
 export function patchArgsForUpdate(params: {
   key: Hex; payload: Uint8Array; contentType: string; attributes?: Record<string, unknown>;
@@ -47,19 +56,23 @@ export function patchArgsForUpdate(params: {
 /** One create through an explicit client (the backend delegates to this). */
 export async function createEntityWithClient(
   client: ArkivCreateClient,
-  params: { payload: Uint8Array; contentType: string; attributes?: Record<string, unknown>; expiresIn?: number },
+  params: { payload: Uint8Array; contentType: string; attributes?: Record<string, unknown>; expiresIn?: number; grp?: string; schema?: Schema },
 ): Promise<{ key: Hex; txHash: Hex }> {
   const { ExpirationTime } = await import('@arkiv-network/sdk');
-  // Plain number, NOT BigInt: the SDK's toBlocks rejects non-numbers, and
-  // requires a positive multiple of the 2s block time (haven.ts enforces
-  // both before the ledger keys the write).
-  const expires = params.expiresIn ? ExpirationTime.fromSeconds(params.expiresIn) : ExpirationTime.fromDays(28);
-  const { entityKey, txHash } = await client.createEntity({
+  const grp = typeof params.attributes?.grp === 'string' ? params.attributes.grp : params.grp;
+  const schema = params.schema ?? schemaForGrp(grp ?? 'haven.video.full');
+  const values: Record<string, unknown> = {
+    ...params.attributes,
     payload: params.payload,
-    contentType: params.contentType,
-    attributes: params.attributes ?? {},
-    expires,
-  });
+    content_type: params.contentType,
+  };
+  const fallbackS = grp === 'haven.video.drip.series' ? HAVEN_BTL_SERIES_S
+    : grp === 'haven.video.drip.part' ? HAVEN_BTL_PART_S
+    : HAVEN_BTL_FULL_S;
+  const options = {
+    expiration: params.expiresIn ? ExpirationTime.fromSeconds(params.expiresIn) : ExpirationTime.fromSeconds(fallbackS),
+  };
+  const { entityKey, txHash } = await client.createEntity(schema, values, options);
   return { key: entityKey, txHash };
 }
 
@@ -71,17 +84,27 @@ export interface ArkivBatchClient {
 /** N creates through an explicit client, keys mapped positionally (the backend delegates to this). */
 export async function createEntitiesWithClient(
   client: ArkivBatchClient,
-  records: Array<{ payload: Uint8Array; contentType: string; attributes?: Record<string, unknown>; expiresIn?: number }>,
+  records: Array<{ payload: Uint8Array; contentType: string; attributes?: Record<string, unknown>; expiresIn?: number; grp?: string; schema?: Schema }>,
 ): Promise<Array<{ key: Hex; txHash: Hex }>> {
   const { ExpirationTime } = await import('@arkiv-network/sdk');
-  const { txHash, createdEntities } = await client.executeBatch({
-    creates: records.map(record => ({
+  const creates = records.map(record => {
+    const grp = typeof record.attributes?.grp === 'string' ? record.attributes.grp : record.grp;
+    const schema = record.schema ?? schemaForGrp(grp ?? 'haven.video.full');
+    const values: Record<string, unknown> = {
+      ...record.attributes,
       payload: record.payload,
-      contentType: record.contentType,
-      attributes: record.attributes ?? {},
-      expires: record.expiresIn ? ExpirationTime.fromSeconds(record.expiresIn) : ExpirationTime.fromDays(28),
-    })),
+      content_type: record.contentType,
+    };
+    const fallbackS = grp === 'haven.video.drip.series' ? HAVEN_BTL_SERIES_S
+      : grp === 'haven.video.drip.part' ? HAVEN_BTL_PART_S
+      : HAVEN_BTL_FULL_S;
+    return {
+      schema,
+      values,
+      expiration: record.expiresIn ? ExpirationTime.fromSeconds(record.expiresIn) : ExpirationTime.fromSeconds(fallbackS),
+    };
   });
+  const { txHash, createdEntities } = await client.executeBatch({ creates });
   // The SDK asserts receipt counts itself; this backstop keeps a short
   // result from silently mis-mapping keys to records.
   if (createdEntities.length !== records.length) {
@@ -92,34 +115,34 @@ export async function createEntitiesWithClient(
 
 /** Minimal chain shape the resolver needs (viem chain objects satisfy this). */
 export interface ArkivChains {
-  tiramisu: { id: number };
+  rabdi: (options: { accessKey: string }) => { id: number };
   localhost: { id: number };
 }
 
 /**
- * Resolve the viem chain for an rpcUrl. @arkiv-network/sdk@0.8.1 ships
- * only `tiramisu` (testnet) and `localhost` chains — there is no mainnet
+ * Resolve the viem chain for an rpcUrl. @arkiv-network/sdk@1.x ships
+ * `rabdi` (testnet, access-key gated) and `localhost` — there is no mainnet
  * export, so mainnet URLs fail loud instead of building a client with an
  * undefined chain.
  */
-export function resolveChainForRpcUrl(rpcUrl: string, chains: ArkivChains): { id: number } {
+export function resolveChainForRpcUrl(rpcUrl: string, chains: ArkivChains, accessKey: string): { id: number } {
   if (rpcUrl.includes('mainnet')) {
-    throw new Error('dsh-arkiv: @arkiv-network/sdk@0.8.1 ships no mainnet chain (tiramisu/localhost only); use a testnet rpcUrl');
+    throw new Error('dsh-arkiv: @arkiv-network/sdk@1.x ships no mainnet chain (rabdi/localhost only); use a testnet rpcUrl');
   }
   if (rpcUrl.includes('localhost') || rpcUrl.includes('127.0.0.1')) return chains.localhost;
-  return chains.tiramisu;
+  return chains.rabdi({ accessKey });
 }
 
 export class ArkivBackend {
   constructor(private readonly opts: ArkivBackendOpts) {}
 
   private async getWalletClient(): Promise<any> {
-    const { createWalletClient, http } = await import('@arkiv-network/sdk');
+    const { createWalletClient } = await import('@arkiv-network/sdk');
     const { privateKeyToAccount } = await import('viem/accounts');
     const chains = await import('@arkiv-network/sdk/chains');
     const pk = (await this.opts.getPrivateKey()) as Hex;
     const account = privateKeyToAccount(pk);
-    const chain = resolveChainForRpcUrl(this.opts.rpcUrl, chains);
+    const chain = resolveChainForRpcUrl(this.opts.rpcUrl, chains, '');
     const transport = (await import('viem')).http(this.opts.rpcUrl);
     // Use createWalletClient from @arkiv-network/sdk which extends viem with Arkiv actions
     const client = createWalletClient({
@@ -133,7 +156,7 @@ export class ArkivBackend {
   private async getPublicClient(): Promise<any> {
     const { createPublicClient } = await import('@arkiv-network/sdk');
     const chains = await import('@arkiv-network/sdk/chains');
-    const chain = resolveChainForRpcUrl(this.opts.rpcUrl, chains);
+    const chain = resolveChainForRpcUrl(this.opts.rpcUrl, chains, '');
     const client = createPublicClient({
       chain,
       transport: (await import('viem')).http(this.opts.rpcUrl),
@@ -141,9 +164,9 @@ export class ArkivBackend {
     return client;
   }
 
-  async createEntity(params: { payload: Uint8Array; contentType: string; attributes?: Record<string, unknown>; expiresIn?: number }): Promise<{ key: Hex; txHash: Hex }> {
+  async createEntity(params: { payload: Uint8Array; contentType: string; attributes?: Record<string, unknown>; expiresIn?: number; grp?: string }): Promise<{ key: Hex; txHash: Hex }> {
     const client = await this.getWalletClient();
-    return createEntityWithClient(client as ArkivCreateClient, params);
+    return createEntityWithClient(client as ArkivCreateClient, { ...params, schema: this.opts.schema });
   }
 
   /**
@@ -151,34 +174,52 @@ export class ArkivBackend {
    * the reference `batch_sync_contexts` multi path. Every record validates
    * before this runs, so a chain revert is gas/chain state — never shape.
    */
-  async createEntities(records: Array<{ payload: Uint8Array; contentType: string; attributes?: Record<string, unknown>; expiresIn?: number }>): Promise<Array<{ key: Hex; txHash: Hex }>> {
+  async createEntities(records: Array<{ payload: Uint8Array; contentType: string; attributes?: Record<string, unknown>; expiresIn?: number; grp?: string }>): Promise<Array<{ key: Hex; txHash: Hex }>> {
     const client = await this.getWalletClient();
-    return createEntitiesWithClient(client as ArkivBatchClient, records);
+    return createEntitiesWithClient(client as ArkivBatchClient, records.map(record => ({ ...record, schema: this.opts.schema })));
   }
 
-  async updateEntity(params: { key: Hex; payload: Uint8Array; contentType: string; attributes?: Record<string, unknown>; expiresIn?: number }): Promise<{ txHash: Hex }> {
+  async updateEntity(params: { key: Hex; payload: Uint8Array; contentType: string; attributes?: Record<string, unknown>; expiresIn?: number; grp?: string }): Promise<{ txHash: Hex }> {
     const client = await this.getWalletClient();
+    const grp = typeof params.attributes?.grp === 'string' ? params.attributes.grp : params.grp;
+    const schema = this.opts.schema ?? schemaForGrp(grp ?? 'haven.video.full');
     const { ExpirationTime } = await import('@arkiv-network/sdk');
-    const expires = params.expiresIn ? ExpirationTime.fromSeconds(params.expiresIn) : undefined;
-    const { txHash } = await (client as any).patchEntity({
-      ...patchArgsForUpdate({ key: params.key, payload: params.payload, contentType: params.contentType, attributes: params.attributes }),
-      expires,
-    });
+    const values: Record<string, unknown> = {
+      ...params.attributes,
+      payload: params.payload,
+      content_type: params.contentType,
+    };
+    // SDK 1.x: patchEntity takes ONE params object {schema, entityKey, set, unset}
+    // and cannot move the expiry — that is extendEntity's job.
+    const { txHash } = await (client as any).patchEntity({ schema, entityKey: params.key, set: values });
+    if (params.expiresIn) {
+      const expiration = ExpirationTime.fromSeconds(params.expiresIn);
+      await (client as any).extendEntity({ entityKey: params.key, expiration });
+    }
     return { txHash };
   }
 
   async extendEntity(params: { key: Hex; expiresIn: number }): Promise<{ txHash: Hex }> {
     const client = await this.getWalletClient();
     const { ExpirationTime } = await import('@arkiv-network/sdk');
-    const expires = ExpirationTime.fromSeconds(params.expiresIn);
-    const { txHash } = await (client as any).extendEntity({ entityKey: params.key, expires });
+    const expiration = ExpirationTime.fromSeconds(params.expiresIn);
+    const { txHash } = await (client as any).extendEntity({ entityKey: params.key, expiration });
     return { txHash };
   }
 
   async queryEntities(query: { where?: Record<string, unknown>; limit?: number }): Promise<any[]> {
     const client = await this.getPublicClient();
     // Use arkiv query builder: select + where + fetch
-    let builder: any = client.select({ key: true, owner: true, payload: true, contentType: true, attributes: true, expiresAt: true });
+    let builder: any = client.select({
+      $key: true,
+      $owner: true,
+      $creator: true,
+      $createdAt: true,
+      $expiresAt: true,
+      $attributes: true,
+      payload: true,
+      content_type: true,
+    });
     if (query.where) {
       const { and, eq } = await import('@arkiv-network/sdk/query');
       // Every filter entry ANDed: single-entry {sha256_ct} dedup lookups and

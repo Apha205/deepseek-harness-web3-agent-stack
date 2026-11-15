@@ -153,7 +153,7 @@ inside /data and are managed by the agent, not you.
     access) can spend everything.
   - Deposit ONLY what you are comfortable losing.
   - All chain defaults are TESTNETS (Sepolia, Base Sepolia, Filecoin
-    calibration, Arkiv Tiramisu). Mainnet requires explicit reconfiguration.
+    calibration, Arkiv Rabdi). Mainnet requires explicit reconfiguration.
 
 Re-run with -e ACCEPT_HOT_WALLET_RISK=yes to accept and instantiate.
 EOF

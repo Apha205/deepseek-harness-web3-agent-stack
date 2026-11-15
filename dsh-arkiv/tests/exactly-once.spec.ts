@@ -38,7 +38,7 @@ function runtime(guard?: { registerCheck: (...args: any[]) => () => void }) {
     emit: vi.fn(),
     reflect: { get: (name: string) => (name === 'exactlyOnce' ? guard : undefined) },
   };
-  const rt = new ArkivRuntime(ctx as never, 'agent', { privateKeyRef: 'X', rpcUrl: 'https://rpc.tiramisu.test' });
+  const rt = new ArkivRuntime(ctx as never, 'agent', { privateKeyRef: 'X', rpcUrl: 'https://rpc.rabdi.test' });
   const backend: StubBackend = {
     creates: 0,
     updates: 0,

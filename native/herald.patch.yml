@@ -107,7 +107,7 @@
   config:
     wallet: agent
     privateKeyRef: AGENT_EVM_KEY
-    rpcUrl: https://rpc.tiramisu.db-chain.testnet.arkiv.network
+    rpcUrl: https://rpc.rabdi.db-chain.testnet.arkiv.network
 
 - id: royalty-router
   config:
@@ -145,7 +145,7 @@
       keys or seeds — addresses only.
 
       CHAIN POSTURE — testnets by default. Balances: Sepolia, Base Sepolia,
-      Filecoin calibration (FEVM testnet). Arkiv: Tiramisu testnet. Royalty
+      Filecoin calibration (FEVM testnet). Arkiv: Rabdi testnet. Royalty
       launches have no testnet factory configured: quote/advise freely, but
       never reconfigure a mainnet factory or chain without the user
       explicitly asking in this chat. XMTP runs on production (messaging,

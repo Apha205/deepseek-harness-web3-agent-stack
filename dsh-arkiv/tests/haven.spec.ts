@@ -267,14 +267,14 @@ describe('haven writes: normalization', () => {
     expect(typeof write.attributes.gate_type).toBe('number');
   });
 
-  it('wraps drip facts in their spec-tagged SDK values', () => {
+  it('keeps drip facts bare for the SDK 1.x schema columns', () => {
     const write = validateHavenWrite(dripPart());
-    expect(write.attributes.series_ref).toEqual({ type: 'key', value: SERIES_REF });
-    expect(write.attributes.sha256_ct).toEqual({ type: 'bytes32', value: `0x${SHA}` });
-    expect(write.attributes.gate_type).toEqual({ type: 'i32', value: 4 });
-    expect(write.attributes.drip_id).toEqual({ type: 'str', value: DRIP_ID });
+    expect(write.attributes.series_ref).toBe(SERIES_REF);
+    expect(write.attributes.sha256_ct).toBe(SHA);
+    expect(write.attributes.gate_type).toBe(4);
+    expect(write.attributes.drip_id).toBe(DRIP_ID);
     const series = validateHavenWrite(dripSeries());
-    expect(series.attributes.gate_token).toMatchObject({ type: 'addr' });
+    expect(series.attributes.gate_token).toBe(TOKEN);
   });
 
   it('defaults BTL per group (4w full, 52w series, 12w parts)', () => {
@@ -295,20 +295,20 @@ describe('haven writes: normalization', () => {
     const midGate = { ...gateV1(), threshold: String(2 ** 31) };
     mid.payload = new TextEncoder().encode(JSON.stringify({ piece: 'bafkzcibfqxpnqbyvelkgtgrat5onehutj77ggt5kcyydvphgd5gzw4wk4qyi3ewfkuzq', gate: JSON.stringify(midGate) }));
     mid.attributes = { ...mid.attributes, gate_threshold: 2 ** 31 };
-    expect(validateHavenWrite(mid).attributes.gate_threshold).toEqual({ type: 'u256', value: BigInt(2 ** 31) });
+    expect(validateHavenWrite(mid).attributes.gate_threshold).toBe(BigInt(2 ** 31));
     // 1e18 is past 2**53: numbers are refused, decimal strings stay exact.
     const wei = fullV1();
     const weiGate = { ...gateV1(), threshold: '1000000000000000000' };
     wei.payload = new TextEncoder().encode(JSON.stringify({ piece: 'bafkzcibfqxpnqbyvelkgtgrat5onehutj77ggt5kcyydvphgd5gzw4wk4qyi3ewfkuzq', gate: JSON.stringify(weiGate) }));
     wei.attributes = { ...wei.attributes, gate_threshold: '1000000000000000000' };
-    expect(validateHavenWrite(wei).attributes.gate_threshold).toEqual({ type: 'u256', value: 10n ** 18n });
+    expect(validateHavenWrite(wei).attributes.gate_threshold).toBe(10n ** 18n);
     expect(() => validateHavenWrite({ ...fullV1(), attributes: { ...fullV1().attributes, gate_threshold: 10 ** 18 } }))
       .toThrow(/safe integer/);
   });
 
-  it('tags series thresholds u256 too', () => {
+  it('keeps series thresholds as bare u256-typed bigints', () => {
     const series = validateHavenWrite(dripSeries());
-    expect(series.attributes.gate_threshold).toEqual({ type: 'u256', value: 5n });
+    expect(series.attributes.gate_threshold).toBe(5n);
   });
 });
 
@@ -572,10 +572,11 @@ describe('haven query filters', () => {
     expect(normalizeHavenWhere({ sha256_ct: `0x${SHA.toUpperCase()}` })).toEqual({ sha256_ct: SHA });
   });
 
-  it('wraps series_ref as key and drip-part sha256_ct as bytes32', () => {
-    expect(normalizeHavenWhere({ series_ref: SERIES_REF }).series_ref).toEqual({ type: 'key', value: SERIES_REF });
-    const scoped = normalizeHavenWhere({ grp: 'haven.video.drip.part', sha256_ct: SHA });
-    expect(scoped.sha256_ct).toEqual({ type: 'bytes32', value: `0x${SHA}` });
+  it('normalizes series_ref and sha256_ct to the bare str spellings', () => {
+    expect(normalizeHavenWhere({ series_ref: SERIES_REF.toUpperCase().replace('0X', '0x') }).series_ref).toBe(SERIES_REF);
+    expect(normalizeHavenWhere({ series_ref: SERIES_REF.slice(2) }).series_ref).toBe(SERIES_REF);
+    const scoped = normalizeHavenWhere({ grp: 'haven.video.drip.part', sha256_ct: `0x${SHA}` });
+    expect(scoped.sha256_ct).toBe(SHA);
   });
 
   it('leaves already-tagged values untouched', () => {
@@ -596,7 +597,7 @@ describe('haven query filters', () => {
   });
 
   it('allows system attributes and rejects reserved names', () => {
-    expect(normalizeHavenWhere({ $key: SERIES_REF })).toEqual({ $key: SERIES_REF });
+    expect(normalizeHavenWhere({ $key: SERIES_REF }).$key).toEqual({ type: 'key', value: SERIES_REF });
     expect(() => normalizeHavenWhere({ and: 1 })).toThrow(/reserved/);
   });
 });
@@ -604,7 +605,7 @@ describe('haven query filters', () => {
 describe('haven runtime wiring', () => {
   function wiredRuntime() {
     const ctx: any = { emit: vi.fn(), reflect: { get: () => undefined } };
-    const rt = new ArkivRuntime(ctx as never, 'agent', { privateKeyRef: 'X', rpcUrl: 'https://rpc.tiramisu.test' });
+    const rt = new ArkivRuntime(ctx as never, 'agent', { privateKeyRef: 'X', rpcUrl: 'https://rpc.rabdi.test' });
     const seen: Array<{ attributes?: Record<string, unknown>; expiresIn?: number }> = [];
     let creates = 0;
     (rt as any).backend = {

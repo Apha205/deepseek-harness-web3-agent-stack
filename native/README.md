@@ -31,7 +31,7 @@ tool access, so every round is observable in Convos.
 ## Chain posture
 
 Testnets: Sepolia, Base Sepolia, Filecoin calibration (FEVM testnet),
-Arkiv Tiramisu. XMTP is production (messaging, not money). Royalty router
+Arkiv Rabdi. XMTP is production (messaging, not money). Royalty router
 rides Base mainnet config for quotes (no factory deployed — advise only).
 
 ## Reinstall / update

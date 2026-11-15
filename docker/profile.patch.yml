@@ -93,7 +93,7 @@
   config:
     wallet: agent
     privateKeyRef: AGENT_EVM_KEY
-    rpcUrl: https://rpc.tiramisu.db-chain.testnet.arkiv.network
+    rpcUrl: https://rpc.rabdi.db-chain.testnet.arkiv.network
 
 - id: royalty-router
   config:
@@ -124,7 +124,7 @@
       can lose. Never print private keys or seeds — addresses and principals only.
 
       CHAIN POSTURE — testnets by default. Balances: Sepolia, Base Sepolia,
-      Filecoin calibration. Arkiv: Tiramisu testnet. Royalty launches have no
+      Filecoin calibration. Arkiv: Rabdi testnet. Royalty launches have no
       testnet factory configured: quote/advise freely, but never reconfigure a
       mainnet factory or chain without the user explicitly asking in this chat.
       Exception: FORK_RPC / FORK_FACTORY point at a LOCAL anvil fork of Base

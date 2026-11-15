@@ -39,7 +39,7 @@ function runtime() {
     emit: vi.fn(),
     reflect: { get: () => undefined },
   };
-  const rt = new ArkivRuntime(ctx as never, 'agent', { privateKeyRef: 'X', rpcUrl: 'https://rpc.tiramisu.test' });
+  const rt = new ArkivRuntime(ctx as never, 'agent', { privateKeyRef: 'X', rpcUrl: 'https://rpc.rabdi.test' });
   const backend = {
     singles: 0,
     batches: 0,
