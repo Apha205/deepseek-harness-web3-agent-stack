@@ -17,10 +17,10 @@
  * every Haven surface (the Python CLI can only write `str`/`int`).
  */
 
-import { defineSchema, str, i32, u256, bytes } from '@arkiv-network/sdk/schema';
+import { defineSchema, str, i32, u256, bytes, type Schema } from '@arkiv-network/sdk/schema';
 
 /** Full/generic groups: video, audio, image, text, file, custom dot hierarchies. */
-export const HavenFullSchema = defineSchema('haven-full', {
+export const HavenFullSchema: Schema = defineSchema('haven-full', {
   grp: str().indexed(),
   title: str(),
   gate_type: i32().optional(),
@@ -36,7 +36,7 @@ export const HavenFullSchema = defineSchema('haven-full', {
 });
 
 /** Drip series headers: `haven.video.drip.series`. */
-export const HavenSeriesSchema = defineSchema('haven-series', {
+export const HavenSeriesSchema: Schema = defineSchema('haven-series', {
   grp: str().indexed(),
   title: str(),
   gate_type: i32(),
@@ -50,7 +50,7 @@ export const HavenSeriesSchema = defineSchema('haven-series', {
 });
 
 /** Drip parts: `haven.video.drip.part`. */
-export const HavenPartSchema = defineSchema('haven-part', {
+export const HavenPartSchema: Schema = defineSchema('haven-part', {
   grp: str().indexed(),
   gate_type: i32(),
   drip_id: str().indexed(),
@@ -63,7 +63,7 @@ export const HavenPartSchema = defineSchema('haven-part', {
 });
 
 /** Pick the schema for a normalized write's `grp` value. */
-export function schemaForGrp(grp: string) {
+export function schemaForGrp(grp: string): Schema {
   if (grp === 'haven.video.drip.series') return HavenSeriesSchema;
   if (grp === 'haven.video.drip.part') return HavenPartSchema;
   return HavenFullSchema;
