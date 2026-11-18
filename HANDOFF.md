@@ -18,7 +18,7 @@ ffmpeg inside, Convos/XMTP QR output. Build context = this repo,
 - Two `file:` deps escape the build context and are now satisfied by pinned
   git clones (committed, b61983d):
   - `dsh-haven-aol` → `file:../../haven-aol/packages/typescript`
-    = `/opt/haven-aol`, `HAVEN_AOL_REF=29327ae8` (= haven-aol origin HEAD,
+    = `/opt/haven-aol`, `HAVEN_AOL_REF=2fc5bbfb` (= haven-aol origin HEAD,
     matches local checkout). Built with `npm ci` (its pnpm lock is stale).
   - `dsh-royalty-router` → `file:../../mint-glue-graduate/sdk`
     = `/opt/mint-glue-graduate`, `ROYALTY_REF=5f8b8b79` (= origin HEAD,

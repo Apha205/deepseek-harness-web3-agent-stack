@@ -89,7 +89,7 @@ COPY dsh-agent-herald/ /opt/stack/dsh-agent-herald/
 # haven-aol source: dsh-haven-aol depends on it via
 # file:../../haven-aol/packages/typescript, which resolves to /opt/haven-aol
 # from /opt/stack. Pinned to the commit the stack was developed against.
-ARG HAVEN_AOL_REF=29327ae849f2fd10205828b089fedfbff5849837
+ARG HAVEN_AOL_REF=2fc5bbfba170d7665b902fefb1ed8605ae14535c
 RUN git init -q /opt/haven-aol && cd /opt/haven-aol \
     && git remote add origin https://github.com/Haven-hvn/haven-aol.git \
     && git fetch -q --depth 1 origin ${HAVEN_AOL_REF} && git checkout -q FETCH_HEAD \
