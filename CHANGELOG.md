@@ -2,6 +2,13 @@
 
 ## Unreleased — 2026-11-14
 
+- chore(deps): upgrade harness train to dsh 0.2.2-rc.4
+  - rc.4 adds `CONTENT_REFUSED` to `LLM_FAILURE_CODES`: DeepSeek refusals
+    (`stop_reason: "refusal"`) now surface as `turn/end` `reason.kind:
+    'error'` instead of malformed output. No stack consumer classifies LLM
+    failure codes, so no source changes were required; see
+    MIGRATION-0.2.2.md. `pnpm-lock.yaml` still needs `pnpm install` to
+    regenerate peer-context hashes.
 - chore(deps): upgrade harness train to dsh 0.2.2-rc.3 (a9e91e7)
 - Upgrade JS bridge to @filoz/synapse-core 0.11.0 (ff1d893)
   - Note: 0.11.0 was published 2026-11-13T18:46:36Z; it falls inside the

@@ -34,15 +34,15 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.1.0",
-    "@deepseek-ai/dsh-tools": "0.2.2-rc.3",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.4",
     "dsh-wallet": "workspace:*"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "~4.1.0",
-    "@deepseek-ai/dsh-llm": "=0.2.2-rc.3",
-    "@deepseek-ai/dsh-system-prompt": "=0.2.2-rc.3",
-    "@deepseek-ai/dsh-tool-executor-native": "=0.2.2-rc.3",
-    "@deepseek-ai/dsh-tools": "=0.2.2-rc.3",
+    "@deepseek-ai/dsh-llm": "=0.2.2-rc.4",
+    "@deepseek-ai/dsh-system-prompt": "=0.2.2-rc.4",
+    "@deepseek-ai/dsh-tool-executor-native": "=0.2.2-rc.4",
+    "@deepseek-ai/dsh-tools": "=0.2.2-rc.4",
     "vitest": "=5.0.2"
   }
 }

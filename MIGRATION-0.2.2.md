@@ -1,19 +1,42 @@
-# Migration: dsh 0.2.1-alpha.1 → 0.2.2-rc.3
+# Migration: dsh 0.2.1-alpha.1 → 0.2.2-rc.4
 
-`0.2.2-rc.3` is the current `rc` train on npm (the supplied
-`deepseek-harness-dsh-v0.2.2-rc.3` source tree was used as the API reference).
+`0.2.2-rc.4` is the current `rc` train on npm (the supplied
+`deepseek-harness-dsh-v0.2.2-rc.4` source tree was used as the API reference).
 Upstream APIs are pre-stable; every consumer was re-verified against that tree.
 
 ## Pins
 
 | Surface | Before | After |
 | --- | --- | --- |
-| `@deepseek-ai/dsh-*` (16 packages) | `0.2.1-alpha.1` | `0.2.2-rc.3` |
+| `@deepseek-ai/dsh-*` (16 packages) | `0.2.1-alpha.1` | `0.2.2-rc.4` |
 | `@deepseek-ai/cordis` | `~4.0.5-alpha.1` | `~4.1.0` |
 | `@deepseek-ai/schemastery` | `~3.18.5-alpha.1` | `~3.19.0` |
-| `@deepseek-ai/dsh-tool-executor-native` | — | `=0.2.2-rc.3` (new test devDep, 9 packages) |
+| `@deepseek-ai/dsh-tool-executor-native` | — | `=0.2.2-rc.4` (new test devDep, 9 packages) |
 | `@xmtp/node-sdk` (docker helper) | `6.1.0` | `6.1.1` |
 | Node engine | `>=22` implied | `>=24.9.0` required upstream |
+
+## rc.3 → rc.4
+
+rc.4 is eight commits past rc.3; almost all are release/dependency metadata.
+The one functional change is in `dsh-llm-deepseek` (not a direct dependency of
+this stack): provider streams ending with `stop_reason: "refusal"` now raise an
+`LlmError` coded `CONTENT_REFUSED` — added to `LLM_FAILURE_CODES` — instead of
+surfacing as malformed output. Billed usage is emitted before the throw, and the
+failed turn's `turn/end` carries `reason.kind: 'error'` with that code.
+
+Consumer audit against the rc.4 tree:
+
+- No stack package imports `dsh-llm-deepseek` or reads `LLM_FAILURE_CODES`,
+  `LlmError.code`, or `LlmFailure` outside tests.
+- `TurnEndReasonMap` is unchanged (`completed`, `aborted`, `blocked`, `error`,
+  `max-tokens`, `interrupted`, `forked`); `error` still carries `LlmFailure`,
+  so `CONTENT_REFUSED` flows through the existing `reason.error.code` field.
+- `dsh-channel-xmtp` never classifies turn-end reasons: it projects
+  `assistant/message` output and settles on every `turn/end`. A refused turn
+  produces no assistant output, so the channel's silence convention already
+  covers it — no source change required.
+- `dsh-treasury` specs assert `reason.kind` `'error'`/`'completed'` only;
+  still valid.
 
 ## Breaking changes fixed
 
@@ -70,7 +93,7 @@ utilities, not production callers.
 
 ## Deployment
 
-- `docker/Dockerfile`: `npm i -g @deepseek-ai/dsh@0.2.2-rc.3`, Node base
+- `docker/Dockerfile`: `npm i -g @deepseek-ai/dsh@0.2.2-rc.4`, Node base
   bumped to a `>=24.9` image.
 - `native/README.md`: same global CLI pin.
 - `.github/workflows/ci.yml`: `actions/setup-node` pins Node 24 for the
@@ -78,8 +101,10 @@ utilities, not production callers.
 
 ## Lockfile
 
-`pnpm-lock.yaml` still resolves the 0.2.1 train plus the pre-existing
-`@xmtp/node-sdk@6.1.1` bump. It must be regenerated (`pnpm install`) before
-the frozen-lockfile CI install can pass — peer-context hashes are not
-hand-editable. The upstream `deepseek-harness-dsh-v0.2.2-rc.3/` source tree
-is intentionally untracked.
+`pnpm-lock.yaml` version strings and specifiers were updated to the rc.4
+train, but peer-context hashes are not hand-editable and were left as
+resolved under rc.3. It must be regenerated (`pnpm install`) before the
+frozen-lockfile CI install can pass. The upstream
+`deepseek-harness-dsh-v0.2.2-rc.4/` source tree is intentionally untracked.
+No tests, builds, or installs were run for this migration; validation was
+file inspection only.

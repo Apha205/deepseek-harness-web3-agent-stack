@@ -36,11 +36,11 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.1.0",
-    "@deepseek-ai/dsh-tools": "0.2.2-rc.3"
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.4"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "~4.1.0",
-    "@deepseek-ai/dsh-tools": "=0.2.2-rc.3",
+    "@deepseek-ai/dsh-tools": "=0.2.2-rc.4",
     "dsh-exactly-once": "workspace:=0.1.0",
     "tsdown": "=0.23.0",
     "typescript": "=7.0.2",
